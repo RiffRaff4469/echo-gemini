@@ -24,6 +24,7 @@ before step 7, stop and re-check G1.**
 - [ ] **Data-capable micro-USB cable** — charge-only cables are the #1 cause of "exploit doesn't work"
 - [ ] Original **barrel-jack 15 W PSU**
 - [ ] Windows PC (this one) + a **USB stick ≥ 16 GB** for the Ubuntu live session
+      — **or** a Mac as the flash host (supported, see §3.1 — this keeps an agent online the whole session)
 - [ ] ~15 GB free on the USB stick for staged downloads (or fetch in the live session — it has network)
 
 ## 2. Downloads (stage before you boot Ubuntu)
@@ -34,7 +35,7 @@ before step 7, stop and re-check G1.**
 | `amonet-checkers.zip` | XDA thread (below), OP attachments | **must be the 2.x release** — ships TWRP + `fastbrick.sh`; do NOT use any pre-2026 archive |
 | `boot-root.img` | same XDA thread OP | **filename identical across Echo Show models, contents differ — checkers only. Wrong file = bootloop** |
 | `lineage-18.1-20260624-UNOFFICIAL-checkers.zip` | `gh release download -R amazon-oss/releases lineage-18.1-checkers-v0.6` (477 MB) | stock unofficial LOS 18.1, v0.6 = 2026-06-24, `.sha256sum` published alongside |
-| Android platform-tools (Linux) | developer.android.com/tools/releases/platform-tools | for the live session |
+| Android platform-tools | developer.android.com/tools/releases/platform-tools (Linux zip for the live session; macOS: `brew install --cask android-platform-tools`) | adb + fastboot |
 | Magisk (official only) | github.com/topjohnwu/Magisk/releases | stub APK + `app-debug.apk` of the SAME release |
 
 XDA threads (R0rt1z2):
@@ -66,6 +67,32 @@ in exactly that window. We boot Ubuntu on this PC.
    ```bash
    adb devices        # G3 gate — if empty here, the exploit will fail; swap cable/port
    ```
+
+### 3.1 macOS host (alternative — agent-friendly, recommended if you flash from the Mac)
+
+The Mac is a legitimate flash host: amonet's serial layer supports darwin
+(`/dev/cu.usbmodem*`). Two gotchas, both handled below:
+
+1. **The amonet GitHub source checks `/proc` for ModemManager unconditionally** (Linux-only).
+   On macOS it crashes with `FileNotFoundError` before doing anything. Patch after cloning —
+   in `modules/main.py`, wrap the call (it sits at the top of `main()`):
+   ```python
+   if os.path.isdir("/proc"):
+       check_modemmanager()
+   ```
+   If you are using the XDA release zip and `main.py` runs unpatchable/fine, skip this.
+2. **Documented USB-timing stalls on macOS** during the BROM window. If a step stalls,
+   re-run it; if it recurs, swap cable or port. Annoying but not fatal.
+
+Prep:
+```bash
+brew install --cask android-platform-tools   # adb + fastboot, no driver install needed
+brew install python@3.12 coreutils
+pip3 install --user pyusb
+adb devices        # G3 gate — the cable must enumerate HERE before the exploit
+```
+No ModemManager on macOS — nothing to stop/disable. macOS may pop an "allow accessory"
+permission prompt when the Show attaches — always allow it.
 
 ## 4. Boot modes (memorize this table)
 
