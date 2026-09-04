@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The Live model line has been renamed repeatedly (HANDOFF section 7); this is
 # configuration, not a constant. Check https://ai.google.dev/api/live before
 # assuming this default is still current.
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash-live-001"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
 
 
 class ConfigError(RuntimeError):
