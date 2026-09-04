@@ -55,6 +55,15 @@ different USB identities across BROM → preloader → fastboot, and WSL2's usbi
 in exactly that window. We boot Ubuntu on this PC.
 
 1. Create the live USB (Rufus or balenaEtcher; persistent storage optional but handy).
+   **Ventoy note (this project's T7):** Ventoy = boot partition + one big exFAT data
+   partition. The payloads live on the data partition under `echo-flash/` — it does NOT
+   auto-mount in the live session:
+   ```bash
+   lsblk                                        # T7 ≈ 932 GB; data partition = sdX2
+   sudo mkdir -p /mnt/t7 && sudo mount /dev/sdX2 /mnt/t7
+   ls /mnt/t7/echo-flash                        # ISO, ROM, amonet zip, boot-root.img…
+   ```
+   If exFAT mount fails: `sudo apt install exfatprogs`. GUI: Files → Other Locations → volume.
 2. Boot it on the PC (F12/boot menu). Do NOT install — "Try Ubuntu".
 3. In the session:
    ```bash

@@ -30,6 +30,12 @@ every output against the expected values below.
   real Linux boot (Ubuntu live USB on the Windows PC — NOT WSL2) OR natively on macOS
   (supported by amonet's serial layer; apply the `/proc` guard patch from FLASHING.md §3.1
   to the amonet source first). → back to a normal OS for baseline + Phase 3.
+- This unit's Fire OS has **no USB debugging option** (Amazon Echo Show build). Irrelevant:
+  amonet talks to the MediaTek boot ROM, not adb. Do not ask the user for USB debugging.
+- The boot medium is a **Ventoy Samsung T7**: payloads are on its exFAT data partition
+  (`echo-flash/`) and need `sudo mount /dev/sdX2 /mnt/t7` in the live session (FLASHING.md §3).
+- **Camera will not work on stock LOS v0.6** (the custom camera build is a later phase).
+  A failing camera app after this flash is expected, not a problem.
 - You may be running on Windows, macOS, or inside the Ubuntu live session if the user installed
   Claude Code there. Both are fine — the commands below are Linux/bash compatible
   (Windows: use `adb.exe`/`fastboot.exe`, they're on PATH or in platform-tools).
