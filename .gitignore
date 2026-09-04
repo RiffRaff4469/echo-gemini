@@ -1,0 +1,36 @@
+# ===== SECRETS — never commit =====
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.pem
+local.properties
+secrets/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ===== Android / Gradle =====
+.gradle/
+build/
+captures/
+EchoTerminal/.gradle/
+EchoTerminal/build/
+EchoTerminal/app/build/
+EchoTerminal/local.properties
+
+# ===== IDE / OS =====
+.idea/
+*.iml
+.vscode/
+Thumbs.db
+.DS_Store
+
+# ===== Runtime artifacts =====
+*.log
+server/data/
+server/recordings/
