@@ -142,6 +142,12 @@ echo-gemini/
 | 1 | Unlock and flash stock LineageOS 18.1 | design notes, `docs/FLASHING.md` | hardware |
 | 2 | Build LineageOS with camera + Bluetooth patches | design notes, `docs/ROM-BUILD.md` | hardware |
 | 3 | Device baseline: Tailscale, **measure the mic** | design notes | hardware |
+
+> **Tailscale auth on the Show (decision):** the device never logs into Google.
+> Default = **auth key** from `tailscale.com/admin/settings/keys`, wired headlessly with
+> root via `tailscaled up --authkey=…` (userspace-networking mode) — no browser needed.
+> Fallback = Tailscale app shows a login URL+code; open it on the laptop and complete
+> Google SSO there.
 | 4 | **Server** (`server/`) | design notes | ← this repo's code |
 | 5 | **Client** (`EchoTerminal/`) | design notes | ← this repo's code |
 
