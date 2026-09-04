@@ -1,0 +1,22 @@
+[versions]
+agp = "8.1.4"
+kotlin = "1.9.22"
+coroutines = "1.7.3"
+# OkHttp is the WebSocket client. Android has no built-in one (java.net.http is
+# not on Android), and OkHttp is Square's, not Google's -- nothing here pulls in
+# Play Services.
+okhttp = "4.12.0"
+coreKtx = "1.12.0"
+activity = "1.8.2"
+lifecycle = "2.6.2"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

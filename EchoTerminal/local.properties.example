@@ -1,0 +1,24 @@
+# Copy to EchoTerminal/local.properties (gitignored) and fill in.
+#
+#   Copy-Item EchoTerminal\local.properties.example EchoTerminal\local.properties
+#
+# Android Studio also writes sdk.dir into this same file; the keys coexist.
+# app/build.gradle.kts reads echo.serverUrl and echo.sharedSecret from here and
+# compiles them into BuildConfig.
+#
+# NOTE: a shared secret in BuildConfig is recoverable from the APK by anyone
+# holding the device. That is acceptable here -- the secret is defence in depth
+# behind the tailnet, not the security boundary (HANDOFF section 7) -- but it is
+# why the GEMINI_API_KEY never goes near this file or the device. Rotate
+# ECHO_SHARED_SECRET if the Show leaves the household.
+
+# Path to the Android SDK. Android Studio fills this in for you.
+#sdk.dir=C\:\\Users\\you\\AppData\\Local\\Android\\Sdk
+
+# The server's WebSocket endpoint. Use the Tailscale MagicDNS name so the link
+# survives the PC changing IP.
+#   default when unset: ws://10.0.2.2:8765/ws  (the emulator's route to the host)
+echo.serverUrl=ws://your-pc.tailnet-name.ts.net:8765/ws
+
+# Must match ECHO_SHARED_SECRET in the repo-root .env exactly.
+echo.sharedSecret=
