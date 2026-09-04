@@ -297,8 +297,12 @@ true — weather, calendar, transit, dashboards, with no new APK.
 Registers an at-boot Task Scheduler task running as SYSTEM with auto-restart. It
 writes **no secrets** into the task definition — those stay in `.env`.
 
+> **Deployment note (Jaiden's PC):** port **8765 is taken by the Orbit prod server**
+> (autostarts at boot, elevated). The local `.env` sets `ECHO_PORT=8766` — keep it
+> that way. The examples below show 8765 as the code default; on this machine use 8766.
+
 ```powershell
-.\server\install-service.ps1 -AddFirewallRule -Port 8765   # optional
+.\server\install-service.ps1 -AddFirewallRule -Port 8766   # optional; 8766 on this PC
 .\server\install-service.ps1 -Uninstall
 Get-Content server\data\service.log -Tail 50 -Wait
 ```
