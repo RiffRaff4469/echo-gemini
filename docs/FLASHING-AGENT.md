@@ -1,6 +1,6 @@
 # FLASHING-AGENT.md — Claude Code copilot brief for the Echo Show 5 flash
 
-> Give this to Claude Code on the laptop whenever you're doing Phase-1 hardware work.
+> Give this to Claude Code on the flash host whenever you're doing Phase-1 hardware work.
 > Recommended usage (from repo root, interactive so it can ask you what it sees on screen):
 >
 > ```bash
@@ -8,7 +8,8 @@
 > ```
 >
 > For an autonomous run (it drives adb itself): `claude -p --dangerously-skip-permissions < docs/FLASHING-AGENT.md`
-> — only on the Windows side; during the Ubuntu live session use the interactive form or follow the steps manually.
+> — works on Windows AND macOS hosts. During an Ubuntu live-USB session (no agent installed),
+> use the interactive form with Claude on any machine, or follow the steps manually.
 > `docs/FLASHING.md` is the canonical runbook — this file is the agent wrapper around it. When they disagree, FLASHING.md wins.
 
 ## Role
@@ -25,9 +26,11 @@ every output against the expected values below.
   = device measurements log (append MEASURED values as they are confirmed).
 - The device's Wi-Fi is OFF and MUST STAY OFF for the entire session. An OTA permanently
   closes the exploit window. If the user mentions Wi-Fi connecting, stop everything.
-- Host timeline: Windows (adb/fastboot possible) → Ubuntu live USB session (the amonet
-  exploit MUST run from real Linux, NOT WSL2) → back to Windows (baseline + Phase 3).
-- You may be running on Windows, or inside the Ubuntu live session if the user installed
+- Host timeline: Windows or macOS (adb/fastboot possible) → the amonet exploit runs from a
+  real Linux boot (Ubuntu live USB on the Windows PC — NOT WSL2) OR natively on macOS
+  (supported by amonet's serial layer; apply the `/proc` guard patch from FLASHING.md §3.1
+  to the amonet source first). → back to a normal OS for baseline + Phase 3.
+- You may be running on Windows, macOS, or inside the Ubuntu live session if the user installed
   Claude Code there. Both are fine — the commands below are Linux/bash compatible
   (Windows: use `adb.exe`/`fastboot.exe`, they're on PATH or in platform-tools).
 
