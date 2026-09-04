@@ -1,3 +1,8 @@
+// Imported explicitly: inside the android/defaultConfig blocks the name `java`
+// resolves to Gradle's own `java` extension, so a fully-qualified
+// `java.util.Properties()` fails to compile with "Unresolved reference: util".
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -27,9 +32,9 @@ android {
         // Override per machine in EchoTerminal/local.properties (gitignored):
         //     echo.serverUrl=ws://your-pc.tail1234.ts.net:8765/ws
         //     echo.sharedSecret=<the same value as ECHO_SHARED_SECRET in .env>
-        val localProps = java.util.Properties().apply {
+        val localProps = Properties().apply {
             val f = rootProject.file("local.properties")
-            if (f.exists()) f.inputStream().use { load(it) }
+            if (f.exists()) f.inputStream().use { stream -> this.load(stream) }
         }
         buildConfigField(
             "String",
