@@ -50,11 +50,14 @@ class FakeLiveSession:
         self.audio_in: list[bytes] = []
         self.video_in: list[bytes] = []
         self.text_in: list[str] = []
+        self.turn_ends = 0
         self.tool_responses: list = []
         self.closed = False
         self._inbox: asyncio.Queue = asyncio.Queue()
 
-    async def send_realtime_input(self, *, audio=None, video=None, text=None, **_):
+    async def send_realtime_input(
+        self, *, audio=None, video=None, text=None, audio_stream_end=None, **_
+    ):
         if audio is not None:
             self.audio_in.append(audio.data)
         if video is not None:
@@ -62,16 +65,24 @@ class FakeLiveSession:
             self.video_in.append(video.data)
         if text is not None:
             self.text_in.append(text)
+        if audio_stream_end:
+            self.turn_ends += 1
 
     async def send_tool_response(self, *, function_responses):
         self.tool_responses.extend(function_responses)
 
     async def receive(self):
+        """One model turn per call, then the generator ends -- google-genai 1.75
+        breaks its own receive loop on ``turn_complete``, and the session pump
+        has to re-enter it or the conversation stops after one reply."""
         while True:
             item = await self._inbox.get()
             if item is None:
                 return
             yield item
+            content = item.server_content
+            if content is not None and content.turn_complete:
+                return
 
     # --- test-side helpers ---
     def emit(self, message) -> None:
@@ -287,6 +298,20 @@ async def test_turn_complete_reopens_the_mic(running) -> None:
     assert sink.states[-1] is UiState.LISTENING
 
 
+async def test_conversation_survives_the_first_completed_turn(running) -> None:
+    manager, session, sink, _connector = running
+    session.emit_audio(b"\x01\x02")
+    await settle(10)
+    session.emit_content(turn_complete=True)
+    await settle(10)
+    assert manager.active, "one answered question must not end a 120 s session"
+
+    # Follow-up: the model's second turn has to reach the device too.
+    session.emit_audio(b"\x03\x04")
+    await settle(10)
+    assert sink.audio == [b"\x01\x02", b"\x03\x04"]
+
+
 async def test_barge_in_flushes_device_playback(running) -> None:
     _manager, session, sink, _connector = running
     session.emit_audio(b"\x01\x02" * 50)
@@ -310,6 +335,93 @@ async def test_audio_fed_when_inactive_is_discarded() -> None:
     manager = LiveSessionManager(make_config(), sink, connector=FakeConnector(FakeLiveSession()))
     manager.feed_audio(b"\x00" * 640)  # must not raise
     assert manager.active is False
+
+
+# --- turn-end: the API does not end user turns by itself --------------------
+#
+# Verified against the live API on 2026-09-03: audio streamed with
+# send_realtime_input leaves the user's turn open forever, so the model never
+# answers until an explicit audio_stream_end arrives. These tests pin the cases
+# that decide whether we send one.
+
+
+def make_turn_end_manager(window: float = 0.2):
+    session = FakeLiveSession()
+    sink = RecordingSink()
+    manager = LiveSessionManager(
+        make_config(session_idle_timeout_s=60.0, session_end_turn_silence_s=window),
+        sink,
+        connector=FakeConnector(session),
+    )
+    return manager, session, sink
+
+
+async def test_trailing_silence_ends_the_user_turn_exactly_once() -> None:
+    manager, session, _sink = make_turn_end_manager()
+    await manager.start("wake")
+    manager.feed_audio(b"\x40\x10" * 320)
+    await settle()
+    assert session.audio_in, "the utterance must reach the API first"
+
+    await asyncio.sleep(0.5)
+    assert session.turn_ends == 1, "silence after speech must close the user turn"
+    # Nothing new was said, so the turn must not be closed again and again.
+    await asyncio.sleep(0.4)
+    assert session.turn_ends == 1
+    await manager.stop("done")
+
+
+async def test_no_turn_end_while_the_user_is_still_talking() -> None:
+    manager, session, _sink = make_turn_end_manager()
+    await manager.start("wake")
+    for _ in range(6):
+        manager.feed_audio(b"\x40\x10" * 320)
+        await asyncio.sleep(0.05)
+    assert session.turn_ends == 0, "a pause between words is not the end of a turn"
+
+    await asyncio.sleep(0.5)
+    assert session.turn_ends == 1, "the turn closes once they actually stop"
+    await manager.stop("done")
+
+
+async def test_no_turn_end_while_the_model_is_speaking() -> None:
+    manager, session, _sink = make_turn_end_manager()
+    await manager.start("wake")
+    session.emit_audio(b"\xaa\xbb" * 100)
+    await settle(10)
+    # The user talks over the model. Cutting the model off here would be
+    # barge-in, which the API signals to us -- we must not force it ourselves.
+    manager.feed_audio(b"\x40\x10" * 320)
+    await asyncio.sleep(0.5)
+    assert session.turn_ends == 0
+
+    session.emit_content(interrupted=True)
+    await settle(10)
+    await asyncio.sleep(0.5)
+    assert session.turn_ends == 1, "once the model stops, the user turn closes"
+    await manager.stop("done")
+
+
+async def test_no_turn_end_when_the_user_never_spoke() -> None:
+    manager, session, _sink = make_turn_end_manager()
+    await manager.start("wake")
+    await asyncio.sleep(0.6)
+    assert session.turn_ends == 0, "an empty session must not be told a turn ended"
+    await manager.stop("done")
+
+
+async def test_model_turn_complete_leaves_no_turn_pending() -> None:
+    manager, session, _sink = make_turn_end_manager()
+    await manager.start("wake")
+    manager.feed_audio(b"\x40\x10" * 320)
+    await settle()
+    session.emit_audio(b"\xaa\xbb" * 100)
+    await settle(10)
+    session.emit_content(turn_complete=True)
+    await settle(10)
+    await asyncio.sleep(0.5)
+    assert session.turn_ends == 0, "the model already answered; nothing to close"
+    await manager.stop("done")
 
 
 # --- video -----------------------------------------------------------------

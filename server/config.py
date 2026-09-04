@@ -82,6 +82,11 @@ class Config:
     system_instruction: str = ""
     session_idle_timeout_s: float = 120.0
     session_max_duration_s: float = 600.0
+    # Trailing silence after which the user's turn is explicitly closed. The
+    # Live API does NOT end a turn on its own for realtime audio input, so
+    # without this the model never answers (see gemini_live._pump_end_turn).
+    # 0 disables the explicit turn-end.
+    session_end_turn_silence_s: float = 1.2
 
     # --- wake word ----------------------------------------------------------
     wake_enabled: bool = True
@@ -152,6 +157,7 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         ),
         session_idle_timeout_s=_env_float("SESSION_IDLE_TIMEOUT", 120.0),
         session_max_duration_s=_env_float("SESSION_MAX_DURATION", 600.0),
+        session_end_turn_silence_s=_env_float("SESSION_END_TURN_SILENCE_S", 1.2),
         wake_enabled=_env_bool("WAKE_ENABLED", True),
         wake_model=_env("WAKE_MODEL", "alexa"),
         wake_threshold=_env_float("WAKE_THRESHOLD", 0.5),

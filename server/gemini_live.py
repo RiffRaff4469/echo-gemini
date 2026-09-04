@@ -189,6 +189,10 @@ class LiveSessionManager:
         self._last_activity = 0.0
         self._vision_on = False
         self.dropped_audio_frames = 0
+        # Turn-end bookkeeping -- see _pump_end_turn.
+        self._last_user_audio_at = 0.0
+        self._user_turn_open = False
+        self._model_speaking = False
 
     # --- state ------------------------------------------------------------
 
@@ -235,6 +239,9 @@ class LiveSessionManager:
         self._video_q = asyncio.Queue(_VIDEO_QUEUE_MAX)
         self._vad.reset()
         self.dropped_audio_frames = 0
+        self._last_user_audio_at = 0.0
+        self._user_turn_open = False
+        self._model_speaking = False
         self._started_at = self._clock()
         self.touch()
         log.info("opening Live session (%s) model=%s", reason, self.cfg.gemini_model)
@@ -340,6 +347,7 @@ class LiveSessionManager:
                     asyncio.create_task(self._pump_audio_up(session), name="live-audio-up"),
                     asyncio.create_task(self._pump_video_up(session), name="live-video-up"),
                     asyncio.create_task(self._pump_down(session), name="live-down"),
+                    asyncio.create_task(self._pump_end_turn(session), name="live-end-turn"),
                     asyncio.create_task(self._watchdog(), name="live-watchdog"),
                 ]
                 done, pending = await asyncio.wait(
@@ -389,6 +397,58 @@ class LiveSessionManager:
             await session.send_realtime_input(
                 audio=types.Blob(data=pcm, mime_type=AUDIO_IN_MIME)
             )
+            # The user is mid-utterance; _pump_end_turn closes the turn once
+            # these stop arriving.
+            self._last_user_audio_at = self._clock()
+            self._user_turn_open = True
+
+    async def _pump_end_turn(self, session: Any) -> None:
+        """Close the user's turn explicitly after trailing silence.
+
+        The Live API does NOT end a user turn by itself when audio arrives via
+        ``send_realtime_input``. Verified against the live API on 2026-09-03: a
+        session fed a complete 5 s utterance sat silent for 30+ s and produced
+        zero model audio. Without this the wake-word path -- the single most
+        important path in the app -- never gets a reply.
+
+        The signal that works is ``audio_stream_end``, checked the same day
+        against ``gemini-3.1-flash-live-preview``: streaming the 5 s sample and
+        then sending it produced a transcript and 43 audio chunks, where doing
+        nothing produced 0 and ``send_client_content(turn_complete=True)`` also
+        produced 0. Manual activity detection (``activity_start``/``_end`` with
+        ``automatic_activity_detection`` disabled) works too, but it turns off
+        the server-side VAD that raises the ``interrupted`` messages barge-in
+        depends on, so it would cost more than it buys. Sending audio again
+        after ``audio_stream_end`` simply reopens the stream.
+
+        The device VAD-gates silence before it ever reaches us, so "no frames
+        for ``SESSION_END_TURN_SILENCE_S``" *is* the end of the utterance;
+        there is nothing further to detect. Two guards keep this from firing
+        wrongly: never while the model is speaking (interrupting it is
+        barge-in, which the API signals to us instead), and never when the user
+        has not actually said anything since the last model turn.
+        """
+        window = self.cfg.session_end_turn_silence_s
+        if window <= 0:
+            await self._stop.wait()  # disabled, but must not end the session
+            return
+        tick = max(0.05, window / 4)
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=tick)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if not self._user_turn_open or self._model_speaking:
+                continue
+            if self._clock() - self._last_user_audio_at < window:
+                continue
+            self._user_turn_open = False
+            log.info("user silent for %.1fs -- ending the user turn", window)
+            try:
+                await session.send_realtime_input(audio_stream_end=True)
+            except Exception:
+                log.exception("failed to send turn-end")
 
     async def _pump_video_up(self, session: Any) -> None:
         from google.genai import types
@@ -408,51 +468,71 @@ class LiveSessionManager:
             )
 
     async def _pump_down(self, session: Any) -> None:
-        """Model output: audio to the speaker, interrupts to the flush path."""
-        speaking = False
-        async for message in session.receive():
-            if self._stop.is_set():
-                return
+        """Model output: audio to the speaker, interrupts to the flush path.
 
-            content = getattr(message, "server_content", None)
+        ``session.receive()`` yields ONE model turn and then ends (google-genai
+        1.75 breaks its loop on ``turn_complete``), so it has to be re-entered
+        per turn. Without the outer loop this pump would finish after the
+        model's first reply and take the whole session down with it, leaving
+        the user unable to ask a follow-up without saying the wake word again.
+        """
+        while not self._stop.is_set():
+            received = False
+            async for message in session.receive():
+                received = True
+                if self._stop.is_set():
+                    return
 
-            if content is not None and getattr(content, "interrupted", False):
-                # Barge-in: the API tells us the user spoke over the model.
-                # Everything already queued in AudioTrack is now wrong.
-                log.info("barge-in: flushing device playback")
-                speaking = False
-                self._last_activity = self._clock()
-                await self.sink.send_interrupt()
-                await self.sink.set_mic(True)
-                await self.sink.set_state(UiState.LISTENING)
-                continue
+                content = getattr(message, "server_content", None)
 
-            audio = getattr(message, "data", None)
-            if audio:
-                if not speaking:
-                    speaking = True
-                    # Half-duplex: close the mic while we talk rather than doing
-                    # AEC on one weak microphone (HANDOFF section 8.2).
-                    await self.sink.set_mic(False)
-                    await self.sink.set_state(UiState.SPEAKING)
-                self._last_activity = self._clock()
-                await self.sink.send_audio(audio)
-
-            if content is not None:
-                self._log_transcripts(content)
-                if getattr(content, "turn_complete", False):
-                    speaking = False
+                if content is not None and getattr(content, "interrupted", False):
+                    # Barge-in: the API tells us the user spoke over the model.
+                    # Everything already queued in AudioTrack is now wrong.
+                    log.info("barge-in: flushing device playback")
+                    self._model_speaking = False
                     self._last_activity = self._clock()
+                    await self.sink.send_interrupt()
                     await self.sink.set_mic(True)
                     await self.sink.set_state(UiState.LISTENING)
+                    continue
 
-            tool_call = getattr(message, "tool_call", None)
-            if tool_call is not None and tool_call.function_calls:
-                await self._handle_tool_calls(session, tool_call.function_calls)
+                audio = getattr(message, "data", None)
+                if audio:
+                    # The model answered, so there is no open user turn left to
+                    # close -- and no turn-end may be sent over its voice.
+                    self._user_turn_open = False
+                    if not self._model_speaking:
+                        self._model_speaking = True
+                        # Half-duplex: close the mic while we talk rather than
+                        # doing AEC on one weak microphone (HANDOFF 8.2).
+                        await self.sink.set_mic(False)
+                        await self.sink.set_state(UiState.SPEAKING)
+                    self._last_activity = self._clock()
+                    await self.sink.send_audio(audio)
 
-            go_away = getattr(message, "go_away", None)
-            if go_away is not None:
-                log.info("server sent GoAway (time_left=%s); closing", go_away.time_left)
+                if content is not None:
+                    self._log_transcripts(content)
+                    if getattr(content, "turn_complete", False):
+                        self._model_speaking = False
+                        self._user_turn_open = False
+                        self._last_activity = self._clock()
+                        await self.sink.set_mic(True)
+                        await self.sink.set_state(UiState.LISTENING)
+
+                tool_call = getattr(message, "tool_call", None)
+                if tool_call is not None and tool_call.function_calls:
+                    await self._handle_tool_calls(session, tool_call.function_calls)
+
+                go_away = getattr(message, "go_away", None)
+                if go_away is not None:
+                    log.info(
+                        "server sent GoAway (time_left=%s); closing", go_away.time_left
+                    )
+                    return
+
+            if not received:
+                # A pass that yields nothing means the socket is finished, not
+                # that a turn ended. Re-entering would spin.
                 return
 
     async def _handle_tool_calls(self, session: Any, calls: list[Any]) -> None:
