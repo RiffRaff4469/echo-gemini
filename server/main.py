@@ -31,6 +31,7 @@ from aiohttp import WSCloseCode, WSMsgType, web
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import protocol as P  # noqa: E402
+from alarms import AlarmCoordinator, summarise_state  # noqa: E402
 from config import Config, ConfigError, load_config  # noqa: E402
 from gemini_live import LiveSessionManager  # noqa: E402
 from protocol import (  # noqa: E402
@@ -176,6 +177,11 @@ class Hub:
             threshold=cfg.wake_threshold,
             refractory_s=cfg.wake_refractory_s,
         )
+        # Alarms live on the device; this only relays commands and acks
+        # (see server/alarms.py for why the server holds no authoritative copy).
+        self.alarms = AlarmCoordinator(
+            self.push_alarm_command, timeout_s=cfg.alarm_ack_timeout_s
+        )
         self.session = LiveSessionManager(cfg, self)
         self._recorder: Any = None
         if cfg.record_audio_dir:
@@ -191,6 +197,7 @@ class Hub:
         rather than rejecting is what keeps a flapping device usable.
         """
         old = self.link
+        self.alarms.disconnected()
         self.link = link
         if old is not None:
             log.info("replacing existing device link from %s", old.remote)
@@ -201,6 +208,7 @@ class Hub:
         if self.link is not link:
             return  # already replaced; nothing to do
         self.link = None
+        self.alarms.disconnected()
         log.info("device link from %s gone", link.remote)
         # No device means nothing to stream to. Close the billed session.
         await self.session.stop("device disconnected")
@@ -243,6 +251,8 @@ class Hub:
     # --- inbound ----------------------------------------------------------
 
     async def on_text(self, link: DeviceLink, raw: str) -> None:
+        if link is not self.link:
+            return
         try:
             msg = P.decode(raw)
         except ProtocolError as exc:
@@ -260,6 +270,17 @@ class Hub:
             await self._on_tap(msg)
         elif isinstance(msg, P.CameraStatusMsg):
             await self._on_camera_status(msg)
+        elif isinstance(msg, P.AlarmStateMsg):
+            self.alarms.on_state(msg)
+            log.info(
+                "alarm state: %d alarm(s), %d timer(s)%s%s",
+                len(msg.alarms),
+                len(msg.timers),
+                "" if msg.exact_allowed else " [device cannot schedule exact alarms]",
+                f" error={msg.error}" if msg.error else "",
+            )
+        elif isinstance(msg, P.AlarmFired):
+            await self._on_alarm_fired(msg)
         elif isinstance(msg, P.DeviceLog):
             log.log(
                 _LEVELS.get(msg.level.lower(), logging.INFO),
@@ -293,10 +314,23 @@ class Hub:
             await link.close(WSCloseCode.POLICY_VIOLATION, "protocol mismatch")
             return
 
+        if msg.protocol_minor != P.PROTOCOL_MINOR:
+            # Additive skew only -- not fatal. A v1.0 device simply ignores
+            # alarm_command and never sends alarm_state, so the tools time out
+            # with a message instead of the server refusing to talk to it.
+            log.warning(
+                "device speaks protocol v1.%d, server speaks v1.%d; "
+                "features added in the newer minor will not work",
+                msg.protocol_minor,
+                P.PROTOCOL_MINOR,
+            )
+
         log.info(
-            "device %s (app %s) connected from %s; caps=%s",
+            "device %s (app %s, protocol v%d.%d) connected from %s; caps=%s",
             msg.device_id,
             msg.app_version,
+            msg.protocol_version,
+            msg.protocol_minor,
             link.remote,
             msg.capabilities or "{}",
         )
@@ -308,6 +342,9 @@ class Hub:
         )
         link.send_msg(P.Mic(enabled=True, gain=self.cfg.mic_gain))
         link.send_msg(P.StateMsg(state=UiState.IDLE))
+        # Ask for the schedule up front (no ack wait -- it is only a cache
+        # refresh) so /health and the first list_alarms have something to say.
+        link.send_msg(P.AlarmCommand(op=P.AlarmOp.LIST))
 
     async def _on_tap(self, msg: P.Tap) -> None:
         if not msg.pressed:
@@ -320,6 +357,16 @@ class Hub:
             return
         await self.set_state(UiState.LISTENING)
         await self.session.start("tap")
+
+    async def _on_alarm_fired(self, msg: P.AlarmFired) -> None:
+        """The device is already ringing; this is only so Gemini can say so.
+
+        No attempt is made to open a session for it. Waking the model at 6 a.m.
+        to narrate an alarm nobody asked it to narrate would be both expensive
+        and rude; if a conversation happens to be open, it gets told.
+        """
+        log.info("device %s fired: %s", msg.kind.value, msg.label or "(no label)")
+        await self.session.note_alarm_fired(msg.kind, msg.label)
 
     async def _on_camera_status(self, msg: P.CameraStatusMsg) -> None:
         level = (
@@ -371,6 +418,14 @@ class Hub:
         if self.link:
             self.link.send_msg(P.Display(command=cmd))
 
+    def push_alarm_command(self, cmd: P.AlarmCommand) -> bool:
+        """Returns False when there is no device -- the coordinator turns that
+        into "I could not reach the display" rather than a silent success."""
+        if not self.connected or self.link is None:
+            return False
+        self.link.send_msg(cmd)
+        return True
+
     def clear_display(self) -> None:
         if self.link:
             self.link.send_msg(P.DisplayClear())
@@ -392,6 +447,13 @@ class Hub:
             "vision_streaming": self.session.vision_on,
             "wake_word": self.wake.detector.name if self.wake.active else None,
             "wake_last_score": round(self.wake.last_score, 3),
+            # Last snapshot the device sent, not a server-side schedule -- if
+            # this is null the device simply has not reported yet.
+            "alarms": (
+                summarise_state(self.alarms.last_state)
+                if self.alarms.last_state is not None
+                else None
+            ),
         }
 
     async def shutdown(self) -> None:
@@ -675,5 +737,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 

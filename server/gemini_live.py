@@ -23,10 +23,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Any, Protocol
 
+from alarms import (
+    AlarmCoordinator,
+    AlarmError,
+    normalise_days,
+    resolve_alarm_time,
+    resolve_duration,
+    summarise_state,
+)
 from config import Config
-from protocol import AUDIO_UP_RATE, VIDEO_MIME, CameraStatus, UiState
+from protocol import AUDIO_UP_RATE, VIDEO_MIME, AlarmKind, CameraStatus, UiState
 from wake import EnergyVad
 
 log = logging.getLogger("echo.live")
@@ -36,6 +45,25 @@ log = logging.getLogger("echo.live")
 # (HANDOFF section 7) and is released as soon as it does not.
 LOOK_TOOL = "start_camera"
 STOP_LOOK_TOOL = "stop_camera"
+
+# Alarms and timers. Same pattern as the camera tools: the model calls, the
+# handler talks to the device, and the tool response carries the state the
+# device confirmed -- so what Gemini says out loud is what actually got set.
+SET_ALARM_TOOL = "set_alarm"
+SET_TIMER_TOOL = "set_timer"
+CANCEL_ALARM_TOOL = "cancel_alarm"
+CANCEL_TIMER_TOOL = "cancel_timer"
+LIST_ALARMS_TOOL = "list_alarms"
+
+_ALARM_TOOLS = frozenset(
+    {
+        SET_ALARM_TOOL,
+        SET_TIMER_TOOL,
+        CANCEL_ALARM_TOOL,
+        CANCEL_TIMER_TOOL,
+        LIST_ALARMS_TOOL,
+    }
+)
 
 AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 
@@ -49,6 +77,8 @@ _VIDEO_QUEUE_MAX = 3
 class SessionSink(Protocol):
     """What a session needs to push back at the device. Implemented by ``Hub``."""
 
+    alarms: AlarmCoordinator
+
     async def send_audio(self, pcm: bytes) -> None: ...
     async def send_interrupt(self) -> None: ...
     async def set_state(self, state: UiState) -> None: ...
@@ -60,20 +90,142 @@ class LiveUnavailable(RuntimeError):
     """Raised when a session is requested but no API key is configured."""
 
 
-def _build_tools(cfg: Config) -> list[Any]:
-    """Camera control exposed to the model, only in ``on_demand`` mode.
+def _alarm_declarations() -> list[Any]:
+    """Alarm and timer functions.
 
-    In ``always`` mode frames stream for the whole session and the model has
-    nothing to decide; in ``off`` mode the camera must never open, so declaring
-    the function would be a lie.
+    Times are described to the model as a plain clock reading rather than an
+    epoch, and resolved here against the server's clock. A model asked to do
+    date arithmetic in its head will occasionally set an alarm for last
+    Tuesday; ``alarms.resolve_alarm_time`` cannot.
     """
-    if cfg.vision_mode != "on_demand":
-        return []
     from google.genai import types
 
     return [
-        types.Tool(
-            function_declarations=[
+        types.FunctionDeclaration(
+            name=SET_ALARM_TOOL,
+            description=(
+                "Set an alarm on the display. Use this for a specific time of "
+                "day ('wake me at 7', 'remind me at half past four'). The alarm "
+                "rings on the device itself and keeps working even if this "
+                "server is switched off. Normalize spoken clock times to HH:MM. "
+                "Preserve 'today' or 'tomorrow' in the time argument when spoken. "
+                "For other named dates resolve YYYY-MM-DD using the supplied local clock."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "time": types.Schema(
+                        type=types.Type.STRING,
+                        description=(
+                            "Time of day, 12- or 24-hour: '7', '7:05 am', "
+                            "'19:30', 'tomorrow 7am', or 'today at 19:30'. If the user named an explicit calendar "
+                            "date and time you may instead pass a full ISO-8601 "
+                            "local datetime like '2026-09-07T07:05'."
+                        ),
+                    ),
+                    "label": types.Schema(
+                        type=types.Type.STRING,
+                        description="Short name, e.g. 'Wake up'. Optional.",
+                    ),
+                    "days": types.Schema(
+                        type=types.Type.ARRAY,
+                        items=types.Schema(type=types.Type.STRING),
+                        description=(
+                            "For a repeating alarm: day names such as "
+                            "['mon','tue'], or 'weekdays' / 'weekends' / "
+                            "'daily'. Omit for a one-off alarm."
+                        ),
+                    ),
+                    "date": types.Schema(
+                        type=types.Type.STRING,
+                        description=(
+                            "Optional YYYY-MM-DD for a one-off alarm on a "
+                            "specific day. Omit for the next occurrence."
+                        ),
+                    ),
+                },
+                required=["time"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=SET_TIMER_TOOL,
+            description=(
+                "Start a countdown timer on the display ('ten minutes for the "
+                "pasta'). It counts down and chimes on the device itself, with "
+                "or without this server."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "duration_s": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Total length in seconds. Maximum 86400.",
+                    ),
+                    "label": types.Schema(
+                        type=types.Type.STRING,
+                        description="Short name, e.g. 'Pasta'. Optional.",
+                    ),
+                },
+                required=["duration_s"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=CANCEL_ALARM_TOOL,
+            description=(
+                "Cancel an alarm. Identify it by its label, or by the id from "
+                "list_alarms. With neither, and exactly one alarm set, that one "
+                "is cancelled; if several are set, ask which."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "label": types.Schema(type=types.Type.STRING),
+                    "id": types.Schema(type=types.Type.STRING),
+                },
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=CANCEL_TIMER_TOOL,
+            description=(
+                "Cancel a running timer, by label or by the id from "
+                "list_alarms. With neither, and exactly one timer running, that "
+                "one is cancelled."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "label": types.Schema(type=types.Type.STRING),
+                    "id": types.Schema(type=types.Type.STRING),
+                },
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=LIST_ALARMS_TOOL,
+            description=(
+                "Read back every alarm and running timer on the display. Call "
+                "this before answering any question about what is set, rather "
+                "than relying on what was said earlier in the conversation."
+            ),
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+    ]
+
+
+def _build_tools(cfg: Config) -> list[Any]:
+    """Everything the model may call: camera (``on_demand`` only) and alarms.
+
+    In ``always`` vision mode frames stream for the whole session and the model
+    has nothing to decide; in ``off`` mode the camera must never open, so
+    declaring the function would be a lie. The alarm functions are always
+    declared -- they need no hardware beyond the device already being there.
+    """
+    from google.genai import types
+
+    declarations: list[Any] = list(_alarm_declarations())
+
+    if cfg.vision_mode == "on_demand":
+        declarations.extend(
+            [
                 types.FunctionDeclaration(
                     name=LOOK_TOOL,
                     description=(
@@ -95,7 +247,29 @@ def _build_tools(cfg: Config) -> list[Any]:
                 ),
             ]
         )
-    ]
+
+    return [types.Tool(function_declarations=declarations)]
+
+
+def _system_instruction(cfg: Config) -> str:
+    """The configured instruction plus the one fact a clock appliance needs.
+
+    A Live model has no clock. Without being told the date and time it cannot
+    reason about "tomorrow" at all, and -- worse for a device sitting on a
+    kitchen counter -- it will confidently answer "what time is it?" with
+    nothing. This is computed per session, so a session opened at 6 a.m. is not
+    told yesterday's evening.
+    """
+    now = datetime.now().astimezone()
+    return (
+        f"{cfg.system_instruction}\n\n"
+        f"[context] It is currently {now:%A %d %B %Y}, "
+        f"{now:%H:%M} local time ({now.tzname() or 'local'}). "
+        "You are attached to a display that keeps its own alarms and timers. "
+        "Use the alarm functions to set, cancel or read them back rather than "
+        "relying on memory -- the display rings on its own even when this "
+        "server is off, and it is the only thing that knows what is set."
+    )
 
 
 def _build_connect_config(cfg: Config) -> Any:
@@ -130,7 +304,7 @@ def _build_connect_config(cfg: Config) -> Any:
             )
         ),
         system_instruction=types.Content(
-            parts=[types.Part(text=cfg.system_instruction)]
+            parts=[types.Part(text=_system_instruction(cfg))]
         ),
         # Transcriptions are what make the server logs readable when tuning the
         # wake word against a weak microphone.
@@ -540,26 +714,132 @@ class LiveSessionManager:
 
         responses = []
         for call in calls:
-            if call.name == LOOK_TOOL:
-                await self.request_vision(True)
-                result = {
-                    "status": "camera_opening",
-                    "detail": (
-                        "Frames will arrive at 1 FPS shortly. The device is showing "
-                        "the user a camera-active indicator."
-                    ),
-                }
-            elif call.name == STOP_LOOK_TOOL:
-                await self.request_vision(False)
-                result = {"status": "camera_closed"}
-            else:
-                log.warning("model called unknown tool %r", call.name)
-                result = {"error": f"unknown function {call.name}"}
+            result = await self._run_tool(call)
             responses.append(
                 types.FunctionResponse(id=call.id, name=call.name, response=result)
             )
         if responses:
             await session.send_tool_response(function_responses=responses)
+
+    async def _run_tool(self, call: Any) -> dict[str, Any]:
+        """Run one function call. Never raises -- a tool that blows up must come
+        back as an error the model can say out loud, not as a dead session."""
+        if call.name == LOOK_TOOL:
+            await self.request_vision(True)
+            return {
+                "status": "camera_opening",
+                "detail": (
+                    "Frames will arrive at 1 FPS shortly. The device is showing "
+                    "the user a camera-active indicator."
+                ),
+            }
+        if call.name == STOP_LOOK_TOOL:
+            await self.request_vision(False)
+            return {"status": "camera_closed"}
+        if call.name in _ALARM_TOOLS:
+            return await self._run_alarm_tool(call.name, dict(call.args or {}))
+
+        log.warning("model called unknown tool %r", call.name)
+        return {"error": f"unknown function {call.name}"}
+
+    async def _run_alarm_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Apply an alarm tool call on the device and answer with what it did.
+
+        The response is always the device's confirmed state, never the request:
+        the model saying "done, alarm set for 7:05" has to be backed by the
+        device having said so, or the user gets a promise nothing kept.
+        """
+        coordinator: AlarmCoordinator | None = getattr(self.sink, "alarms", None)
+        if coordinator is None:
+            return {"error": "This display does not support alarms."}
+
+        # Tool calls are user intent, so they keep the billed session alive the
+        # same way speech does -- otherwise a long "set an alarm... no, make it
+        # 7:15" exchange can idle out mid-correction.
+        self.touch()
+
+        try:
+            state = await self._dispatch_alarm(coordinator, name, args)
+        except AlarmError as exc:
+            # Includes bad times, offline device and ack timeouts. All of these
+            # are things the user should simply be told.
+            log.warning("alarm tool %s failed: %s", name, exc)
+            return {"error": str(exc)}
+        except Exception:
+            log.exception("alarm tool %s crashed", name)
+            return {"error": "Something went wrong talking to the display."}
+
+        summary = summarise_state(state)
+        log.info("alarm tool %s -> %s", name, summary["summary"])
+        return summary
+
+    @staticmethod
+    async def _dispatch_alarm(
+        coordinator: AlarmCoordinator, name: str, args: dict[str, Any]
+    ) -> Any:
+        if name == SET_ALARM_TOOL:
+            days = normalise_days(args.get("days"))
+            epoch_ms = resolve_alarm_time(
+                str(args.get("time") or ""),
+                date=str(args.get("date") or ""),
+                days=days,
+            )
+            return await coordinator.set_alarm(
+                label=str(args.get("label") or ""),
+                time_epoch_ms=epoch_ms,
+                days=days,
+            )
+
+        if name == SET_TIMER_TOOL:
+            # Only duration_s is declared, but models volunteer `minutes` often
+            # enough that silently ignoring it would produce a timer of zero.
+            duration_s = resolve_duration(
+                args.get("duration_s"),
+                hours=float(args.get("hours") or 0),
+                minutes=float(args.get("minutes") or 0),
+                seconds=float(args.get("seconds") or 0),
+            )
+            return await coordinator.set_timer(
+                label=str(args.get("label") or ""), duration_s=duration_s
+            )
+
+        if name in (CANCEL_ALARM_TOOL, CANCEL_TIMER_TOOL):
+            kind = (
+                AlarmKind.ALARM.value
+                if name == CANCEL_ALARM_TOOL
+                else AlarmKind.TIMER.value
+            )
+            return await coordinator.cancel(
+                entry_id=str(args.get("id") or ""),
+                label=str(args.get("label") or ""),
+                kind=kind,
+            )
+
+        return await coordinator.list_all()
+
+    async def note_alarm_fired(self, kind: AlarmKind, label: str) -> None:
+        """Tell an open session that the device just started ringing.
+
+        Injected as a text note the same way camera status is. It is not what
+        makes the noise -- the device is already chiming locally -- it just lets
+        a conversation in progress acknowledge it instead of talking over a
+        beeping panel.
+        """
+        session = self._session
+        if session is None or not self.active:
+            return
+        what = f"{kind.value} “{label}”" if label else f"{kind.value}"
+        text = (
+            f"[device] The {what} just went off and the display is chiming. "
+            "Briefly tell the user, then stop. They can tap Dismiss on the screen. "
+            + ("Alarms also have Snooze for five minutes." if kind is AlarmKind.ALARM else "")
+        )
+        log.info("relaying %s fired to the model", kind.value)
+        self.touch()
+        try:
+            await session.send_realtime_input(text=text)
+        except Exception:
+            log.exception("failed to relay the alarm to the model")
 
     async def note_camera_status(self, status: CameraStatus, detail: str) -> None:
         """Relay a device camera event into the conversation as text.

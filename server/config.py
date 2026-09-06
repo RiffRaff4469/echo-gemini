@@ -104,6 +104,12 @@ class Config:
     vision_fps: float = 1.0
     vision_jpeg_quality: int = 80
 
+    # --- alarms and timers --------------------------------------------------
+    # How long a Gemini tool call waits for the device to acknowledge an
+    # alarm_command. Short on purpose: the model is mid-conversation, and
+    # "I could not reach the display" beats ten seconds of dead air.
+    alarm_ack_timeout_s: float = 3.0
+
     # --- device tuning ------------------------------------------------------
     # Software gain applied on-device before uplink. The real value comes from
     # the Phase 3 mic measurement -- see docs/HARDWARE-STATUS.md.
@@ -166,6 +172,7 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         vision_mode=_env("VISION_MODE", "on_demand").lower(),
         vision_fps=_env_float("VISION_FPS", 1.0),
         vision_jpeg_quality=_env_int("VISION_JPEG_QUALITY", 80),
+        alarm_ack_timeout_s=_env_float("ALARM_ACK_TIMEOUT_S", 3.0),
         mic_gain=_env_float("MIC_GAIN", 1.0),
         log_level=_env("LOG_LEVEL", "INFO").upper(),
         record_audio_dir=_env("RECORD_AUDIO_DIR", ""),
@@ -182,6 +189,8 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
             f"VISION_FPS={cfg.vision_fps} exceeds the Live API's 1 FPS cap; clamping to 1.0"
         )
         cfg.vision_fps = 1.0
+    if not 0.0 < cfg.alarm_ack_timeout_s <= 30.0:
+        raise ConfigError("ALARM_ACK_TIMEOUT_S must be in (0, 30]")
     if not 0.0 < cfg.wake_threshold <= 1.0:
         raise ConfigError("WAKE_THRESHOLD must be in (0, 1]")
 

@@ -32,10 +32,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import itertools
 import os
 import sys
 import time
 import wave
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import aiohttp
@@ -94,6 +96,144 @@ def read_pcm(path: Path) -> bytes:
         return wav.readframes(wav.getnframes())
 
 
+class FakeSchedule:
+    """The device's local alarm/timer scheduler, standing in for Android's.
+
+    This in-memory protocol stand-in exercises server tools without hardware.
+    It immediately dismisses fired one-shots and does not model persistence,
+    wake locks, snooze or Android AlarmManager. Android JVM tests cover the
+    actual scheduler; this harness is not evidence of on-device behavior.
+    """
+
+    def __init__(self, clock=time.time) -> None:
+        self._clock = clock
+        self.alarms: dict[str, P.AlarmEntry] = {}
+        self.timers: dict[str, P.AlarmEntry] = {}
+        self._deadlines: dict[str, float] = {}  # timer id -> epoch seconds
+        self._ids = itertools.count(1)
+
+    # --- applying a command ------------------------------------------------
+
+    def apply(self, cmd: P.AlarmCommand) -> str:
+        """Returns an error string, or "" when the command was applied."""
+        if cmd.op is P.AlarmOp.LIST:
+            return ""
+        if cmd.op is P.AlarmOp.SET_ALARM:
+            entry_id = cmd.id or f"a{next(self._ids)}"
+            self.alarms[entry_id] = P.AlarmEntry(
+                id=entry_id,
+                kind=P.AlarmKind.ALARM,
+                label=cmd.label,
+                time_epoch_ms=cmd.time_epoch_ms,
+                days=list(cmd.days),
+            )
+            return ""
+        if cmd.op is P.AlarmOp.SET_TIMER:
+            entry_id = cmd.id or f"t{next(self._ids)}"
+            self.timers[entry_id] = P.AlarmEntry(
+                id=entry_id,
+                kind=P.AlarmKind.TIMER,
+                label=cmd.label,
+                duration_s=cmd.duration_s,
+                remaining_s=cmd.duration_s,
+            )
+            self._deadlines[entry_id] = self._clock() + cmd.duration_s
+            return ""
+        return self._cancel(cmd)
+
+    def _cancel(self, cmd: P.AlarmCommand) -> str:
+        pools = []
+        if cmd.kind != P.AlarmKind.TIMER.value:
+            pools.append(self.alarms)
+        if cmd.kind != P.AlarmKind.ALARM.value:
+            pools.append(self.timers)
+
+        if cmd.id:
+            for pool in pools:
+                if cmd.id in pool:
+                    self._drop(pool, cmd.id)
+                    return ""
+            return f"Nothing with id {cmd.id} is set."
+
+        if cmd.label:
+            wanted = cmd.label.strip().lower()
+            hits = [
+                (pool, key)
+                for pool in pools
+                for key, entry in pool.items()
+                if entry.label.strip().lower() == wanted
+            ]
+            if not hits:
+                return f"Nothing called “{cmd.label}” is set."
+            if len(hits) > 1:
+                return "More than one is set; say which one to cancel."
+            for pool, key in hits:
+                self._drop(pool, key)
+            return ""
+
+        # No identifier at all: unambiguous only if exactly one thing is set.
+        candidates = [(pool, key) for pool in pools for key in pool]
+        if not candidates:
+            return "Nothing is set."
+        if len(candidates) > 1:
+            return "More than one is set; say which one to cancel."
+        pool, key = candidates[0]
+        self._drop(pool, key)
+        return ""
+
+    def _drop(self, pool: dict[str, P.AlarmEntry], key: str) -> None:
+        pool.pop(key, None)
+        self._deadlines.pop(key, None)
+
+    # --- reading -----------------------------------------------------------
+
+    def snapshot(self) -> tuple[list[P.AlarmEntry], list[P.AlarmEntry]]:
+        now = self._clock()
+        for entry_id, entry in self.timers.items():
+            entry.remaining_s = max(0.0, self._deadlines.get(entry_id, now) - now)
+        return list(self.alarms.values()), list(self.timers.values())
+
+    def due(self) -> list[P.AlarmEntry]:
+        """Everything that has come due since the last call.
+
+        One-shot alarms and finished timers are removed; repeating alarms are
+        rolled forward to their next matching weekday.
+        """
+        now = self._clock()
+        fired: list[P.AlarmEntry] = []
+
+        for entry_id, entry in list(self.alarms.items()):
+            if entry.time_epoch_ms / 1000 > now:
+                continue
+            fired.append(entry)
+            if entry.days:
+                entry.time_epoch_ms = _next_repeat(entry.time_epoch_ms, entry.days)
+            else:
+                self.alarms.pop(entry_id, None)
+
+        for entry_id, deadline in list(self._deadlines.items()):
+            if deadline > now:
+                continue
+            entry = self.timers.pop(entry_id, None)
+            self._deadlines.pop(entry_id, None)
+            if entry is not None:
+                entry.remaining_s = 0.0
+                fired.append(entry)
+
+        return fired
+
+
+def _next_repeat(time_epoch_ms: int, days: list[str]) -> int:
+    """Roll a repeating alarm forward to the next selected weekday."""
+    when = datetime.fromtimestamp(time_epoch_ms / 1000)
+    wanted = {P.DAY_NAMES.index(d) for d in days}
+    for offset in range(1, 8):
+        candidate = when + timedelta(days=offset)
+        if candidate.weekday() in wanted:
+            return int(candidate.timestamp() * 1000)
+    return int((when + timedelta(days=7)).timestamp() * 1000)
+
+
 class FakeDevice:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -107,7 +247,11 @@ class FakeDevice:
         self.displays = 0
         self.interrupts = 0
         self.frames_sent = 0
+        self.schedule = FakeSchedule()
+        self.alarm_commands = 0
+        self.chimes = 0
         self._camera_task: asyncio.Task | None = None
+        self._alarm_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
     # --- sending ----------------------------------------------------------
@@ -171,6 +315,7 @@ class FakeDevice:
                 return 1
             finally:
                 await self._stop_camera()
+                await self._stop_alarms()
 
         self._report()
         return 0
@@ -225,6 +370,8 @@ class FakeDevice:
             say("<- display_clear -- back to the ambient clock")
         elif isinstance(msg, P.Video):
             await self._on_video(msg)
+        elif isinstance(msg, P.AlarmCommand):
+            await self._on_alarm_command(msg)
         elif isinstance(msg, P.ErrorMsg):
             say(f"<- ERROR    {msg.code}: {msg.message}")
         else:
@@ -244,6 +391,53 @@ class FakeDevice:
                 say(f"<- audio    {len(frame.payload)} bytes ({total:.1f}s of reply so far)")
         else:
             say(f"<- unexpected media on {frame.channel.name}")
+
+    # --- alarms and timers -------------------------------------------------
+
+    async def _on_alarm_command(self, msg: P.AlarmCommand) -> None:
+        self.alarm_commands += 1
+        say(
+            f"<- alarm_command op={msg.op.value} label={msg.label!r} "
+            f"days={msg.days or '-'} duration={msg.duration_s:g}s"
+        )
+        error = self.schedule.apply(msg)
+        if error:
+            say(f"   rejected: {error}")
+        await self._send_alarm_state(req_id=msg.req_id, error=error)
+        if self._alarm_task is None:
+            self._alarm_task = asyncio.create_task(self._alarm_loop())
+
+    async def _send_alarm_state(self, req_id: str = "", error: str = "") -> None:
+        alarms, timers = self.schedule.snapshot()
+        await self.send(
+            P.AlarmStateMsg(
+                alarms=alarms, timers=timers, req_id=req_id, error=error
+            )
+        )
+        say(f"-> alarm_state {len(alarms)} alarm(s), {len(timers)} timer(s)")
+
+    async def _alarm_loop(self) -> None:
+        """Tick the local schedule. On a real device this is AlarmManager plus
+        an in-process countdown; here it is a 200 ms poll, which is close
+        enough to prove the protocol."""
+        try:
+            while not self._stop.is_set():
+                for entry in self.schedule.due():
+                    self.chimes += 1
+                    # The chime is LOCAL and unconditional -- the message below
+                    # is only so Gemini can react, never what makes the noise.
+                    say(f"** CHIME ** {entry.kind.value} {entry.label!r} is up")
+                    await self.send(
+                        P.AlarmFired(
+                            kind=entry.kind, id=entry.id, label=entry.label
+                        )
+                    )
+                    await self._send_alarm_state()
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            say(f"alarm loop stopped: {exc}")
 
     # --- camera -----------------------------------------------------------
 
@@ -297,10 +491,32 @@ class FakeDevice:
             await self._camera_task
         self._camera_task = None
 
+    async def _stop_alarms(self) -> None:
+        if self._alarm_task is None:
+            return
+        self._alarm_task.cancel()
+        with contextlib.suppress(BaseException):
+            await self._alarm_task
+        self._alarm_task = None
+
     # --- the scripted device behaviour ------------------------------------
 
     async def _script(self) -> None:
         await asyncio.sleep(0.4)  # let the handshake settle
+
+        if getattr(self.args, "timer", 0):
+            # Stands in for someone setting a timer on the panel itself. Proves
+            # the local ring path and the alarm_fired notice with no API key.
+            seconds = float(self.args.timer)
+            say(f"-> (local) starting a {seconds:g}s timer, as if tapped on-screen")
+            self.schedule.apply(
+                P.AlarmCommand(
+                    op=P.AlarmOp.SET_TIMER, label="Harness", duration_s=seconds
+                )
+            )
+            await self._send_alarm_state()
+            if self._alarm_task is None:
+                self._alarm_task = asyncio.create_task(self._alarm_loop())
 
         if self.args.tap:
             say("-> tap (manual override -- opens a session without the wake word)")
@@ -355,6 +571,8 @@ class FakeDevice:
         say(f"display commands received : {self.displays}")
         say(f"interrupts (barge-in)     : {self.interrupts}")
         say(f"video frames sent         : {self.frames_sent}")
+        say(f"alarm commands received   : {self.alarm_commands}")
+        say(f"local chimes rung         : {self.chimes}")
         reply_s = len(self.reply_audio) / (P.AUDIO_DOWN_RATE * 2)
         say(f"model audio received      : {reply_s:.1f}s in {self.reply_chunks} chunks")
         if self.reply_audio and self.args.save_reply:
@@ -404,6 +622,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--shutter",
         action="store_true",
         help="simulate the physical privacy shutter being closed",
+    )
+    parser.add_argument(
+        "--timer",
+        type=float,
+        default=0.0,
+        help="start a local timer of N seconds at startup, as if set on-screen",
     )
     parser.add_argument("--save-reply", help="write the model's audio to this WAV")
     return parser.parse_args(argv)
