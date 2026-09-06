@@ -241,3 +241,42 @@ Anything surprising, so the next person does not rediscover it.
 ```
 TO MEASURE
 ```
+
+---
+
+## MEASURED — 2026-09-06 (real unit, LineageOS 18.1 v0.6)
+
+| Slot | Value |
+|---|---|
+| Unit serial | G0913L0594031A7Q |
+| RAM (MemTotal) | 996,988 kB ≈ **974 MiB** (NOT 2 GB — crown-only claim confirmed inapplicable) |
+| ROM | lineage-18.1-20260624-UNOFFICIAL-checkers (v0.6), sha256 8a0c7f5d…7db32f |
+| Root | Magisk 30.7, `su -c id` → `u:r:magisk:s0` (app-level root CONFIRMED) |
+
+### 1.1 Microphone — MEASURED (near-field verdict)
+
+Method: raw ALSA capture via tinycap returns **pure digital silence** on every PCM
+device (ADC switches `Audio_ADC_1..4_Switch` are Off until the Android HAL routes a
+use-case — MTK ADSP owns the mics). screenrecord has no `--audio-source=mic` on this
+build. **The only valid capture path is the Android audio stack** (AudioRecord): used
+`org.lineageos.recorder` sound mode, 31.7 s at arm's length, pulled + analyzed (ffmpeg
+decode → numpy RMS per window).
+
+| Metric | Measured | Healthy ref |
+|---|---|---|
+| Speech level (p90 of 1 s windows) | **−45.6 dBFS** | −30…−20 dBFS |
+| Peaks | −25.7 dBFS | −6…−12 dBFS |
+| Noise floor (p10) | −63.5 dBFS | — |
+| SNR | **~18 dB** | — |
+| Per-second range | −43…−63 dBFS (no clipping, no gating artifacts) | — |
+
+**Verdict: mic works; gain is ~20–30 dB low (handoff warning confirmed).** Usable
+near-field after the mandatory software gain (+24…+28 dB → MIC_GAIN ≈ 16–24× in
+AudioCapture). Far-field (3–4 m) take NOT yet recorded — pending. Wake word:
+treat as bonus; tap-to-talk is the reliable interface. Tuning data path exists
+(RECORD_AUDIO_DIR) for later calibration.
+
+### Gotchas recorded
+- tinycap/tinymix exist; ADC switches default Off; HAL routes mics only during an
+  active AudioRecord use-case. Raw ALSA probing is a dead end on this MTK stack.
+- LineageOS Recorder output lands in `/sdcard/Music/Sound records/*.m4a` (AAC 256k).
