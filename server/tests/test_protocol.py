@@ -34,6 +34,17 @@ import protocol as P
         P.Interrupt(),
         P.DisplayClear(),
         P.Video(enabled=True, fps=1.0, width=768, height=768, jpeg_quality=70),
+        P.AlarmCommand(op=P.AlarmOp.LIST),
+        P.AlarmCommand(
+            op=P.AlarmOp.SET_ALARM,
+            label="Wake up",
+            time_epoch_ms=1_800_000_000_000,
+            days=["mon", "wed", "fri"],
+            req_id="abc123",
+        ),
+        P.AlarmCommand(op=P.AlarmOp.SET_TIMER, label="Pasta", duration_s=600),
+        P.AlarmCommand(op=P.AlarmOp.CANCEL, id="a1", kind="alarm"),
+        P.AlarmFired(kind=P.AlarmKind.TIMER, id="t2", label="Pasta"),
     ],
 )
 def test_control_message_round_trip(msg: P.Message) -> None:
@@ -162,6 +173,19 @@ def test_audio_frame_constants_match_the_live_api_spec() -> None:
         {"type": "image", "payload": {"url": "https://example.com/a.png"}},
         {"type": "image", "payload": {"url": "data:image/png;base64,AAAA"}},
         {"type": "timer", "payload": {"label": "Pasta", "seconds": 480}},
+        {"type": "now_playing", "payload": {"title": "Teardrop"}},
+        {
+            "type": "now_playing",
+            "payload": {
+                "title": "Teardrop",
+                "artist": "Massive Attack",
+                "album": "Mezzanine",
+                "art_url": "https://example.com/art.jpg",
+                "progress_s": 42,
+                "duration_s": 330,
+                "is_playing": True,
+            },
+        },
     ],
 )
 def test_valid_display_commands_accepted(body: dict) -> None:
@@ -190,6 +214,12 @@ def test_valid_display_commands_accepted(body: dict) -> None:
         {"type": "text", "payload": {"text": "x"}, "duration": "soon"},
         {"type": "text", "payload": {"text": "x"}, "priority": "high"},
         {"type": "text", "payload": {"text": "x"}, "priority": 1.5},
+        {"type": "now_playing", "payload": {}},                    # missing title
+        {"type": "now_playing", "payload": {"title": "x", "artist": 7}},
+        {"type": "now_playing", "payload": {"title": "x", "art_url": "ftp://a/b.jpg"}},
+        {"type": "now_playing", "payload": {"title": "x", "progress_s": -1}},
+        {"type": "now_playing", "payload": {"title": "x", "duration_s": 0}},
+        {"type": "now_playing", "payload": {"title": "x", "is_playing": "yes"}},
     ],
 )
 def test_invalid_display_commands_rejected(body) -> None:
@@ -209,3 +239,79 @@ def test_oversized_html_is_rejected() -> None:
     huge = "x" * (P.MAX_HTML_BYTES + 1)
     with pytest.raises(P.ProtocolError):
         P.DisplayCommand.from_dict({"type": "html", "payload": {"html": huge}})
+
+
+# --- alarms and timers (v1.1) -----------------------------------------------
+
+
+def test_alarm_state_round_trip_keeps_every_field() -> None:
+    state = P.AlarmStateMsg(
+        alarms=[
+            P.AlarmEntry(
+                id="a1",
+                kind=P.AlarmKind.ALARM,
+                label="Wake up",
+                time_epoch_ms=1_800_000_000_000,
+                days=["mon", "tue"],
+            )
+        ],
+        timers=[
+            P.AlarmEntry(
+                id="t1",
+                kind=P.AlarmKind.TIMER,
+                label="Pasta",
+                duration_s=600,
+                remaining_s=421.5,
+                ringing=False,
+            )
+        ],
+        req_id="r7",
+        exact_allowed=False,
+        error="",
+    )
+    decoded = P.decode(state.encode())
+    assert isinstance(decoded, P.AlarmStateMsg)
+    assert decoded.fields() == state.fields()
+    assert decoded.alarms[0].days == ["mon", "tue"]
+    assert decoded.timers[0].remaining_s == pytest.approx(421.5)
+    assert decoded.exact_allowed is False
+
+
+def test_days_are_normalised_to_monday_first_order() -> None:
+    # Both sides must agree on order, or "every Sunday, Monday" reads back
+    # differently than it was set.
+    cmd = P.AlarmCommand(
+        op=P.AlarmOp.SET_ALARM, time_epoch_ms=1, days=["sun", "MON", "sun"]
+    )
+    assert cmd.days == ["mon", "sun"]
+
+
+def test_protocol_minor_is_announced_and_defaults_to_zero_for_old_peers() -> None:
+    assert P.decode(P.Hello(device_id="d").encode()).protocol_minor == P.PROTOCOL_MINOR
+    # A v1.0 device omits the field entirely; that is skew, not corruption.
+    old = P.decode('{"v":1,"t":"hello","device_id":"d"}')
+    assert old.protocol_minor == 0
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"v":1,"t":"alarm_command","op":"detonate"}',
+        '{"v":1,"t":"alarm_command","op":"set_alarm","time_epoch_ms":0}',
+        '{"v":1,"t":"alarm_command","op":"set_timer","duration_s":0}',
+        '{"v":1,"t":"alarm_command","op":"set_timer","duration_s":99999999}',
+        '{"v":1,"t":"alarm_command","op":"list","days":["funday"]}',
+        '{"v":1,"t":"alarm_command","op":"cancel","kind":"reminder"}',
+        '{"v":1,"t":"alarm_fired","kind":"earthquake"}',
+        '{"v":1,"t":"alarm_state","alarms":[{"kind":"alarm"}]}',      # no id
+        '{"v":1,"t":"alarm_state","alarms":[{"id":"a","kind":"nope"}]}',
+    ],
+)
+def test_malformed_alarm_messages_raise_protocol_error(raw: str) -> None:
+    with pytest.raises(P.ProtocolError):
+        P.decode(raw)
+
+
+def test_alarm_labels_are_bounded() -> None:
+    cmd = P.AlarmCommand(op=P.AlarmOp.LIST, label="x" * 500)
+    assert len(cmd.label) == P.MAX_ALARM_LABEL_CHARS

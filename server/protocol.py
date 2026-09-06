@@ -33,6 +33,13 @@ from typing import Any, ClassVar
 
 PROTOCOL_VERSION = 1
 
+# Additive changes inside v1 bump the MINOR only. v1.1 adds the alarm/timer
+# channel (``alarm_command`` / ``alarm_state`` / ``alarm_fired``) and the
+# ``now_playing`` display card. A v1.0 peer stays compatible: it simply never
+# sends or understands the new types, and both sides ignore what they do not
+# recognise. ``hello`` and ``welcome`` announce it so each end can log the skew.
+PROTOCOL_MINOR = 1
+
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
 # (HANDOFF section 13). The device produces and consumes exactly these, so the
@@ -77,6 +84,8 @@ class MsgType(str, Enum):
     CAMERA_STATUS = "camera_status"
     DEVICE_LOG = "device_log"
     ERROR = "error"
+    ALARM_STATE = "alarm_state"  # v1.1
+    ALARM_FIRED = "alarm_fired"  # v1.1
 
     # server -> device
     WELCOME = "welcome"
@@ -87,6 +96,7 @@ class MsgType(str, Enum):
     DISPLAY = "display"
     DISPLAY_CLEAR = "display_clear"
     VIDEO = "video"
+    ALARM_COMMAND = "alarm_command"  # v1.1
 
 
 class UiState(str, Enum):
@@ -115,6 +125,36 @@ class DisplayType(str, Enum):
     HTML = "html"
     IMAGE = "image"
     TIMER = "timer"
+    NOW_PLAYING = "now_playing"  # v1.1 -- rendered like any other card
+
+
+class AlarmOp(str, Enum):
+    """What an ``alarm_command`` asks the device's local scheduler to do.
+
+    Every op is applied on-device. The server is a convenience, never a
+    dependency: alarms and timers keep working with the PC switched off, which
+    is the whole point of scheduling them locally (BUILD-BRIEF-3 section 1).
+    """
+
+    SET_ALARM = "set_alarm"
+    SET_TIMER = "set_timer"
+    CANCEL = "cancel"
+    LIST = "list"
+
+
+class AlarmKind(str, Enum):
+    ALARM = "alarm"
+    TIMER = "timer"
+
+
+# Wire form for repeating-alarm days. Lowercase English abbreviations rather
+# than integers because the two platforms disagree about which day is 0
+# (Python's ``weekday()`` starts on Monday, ``java.util.Calendar`` on Sunday) and
+# a silent off-by-one here means an alarm on the wrong morning.
+DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+MAX_TIMER_DURATION_S = 24 * 60 * 60
+MAX_ALARM_LABEL_CHARS = 64
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +310,29 @@ class DisplayCommand:
                 raise ProtocolError("payload.seconds must be a number")
             if seconds <= 0:
                 raise ProtocolError("payload.seconds must be positive")
+        elif self.type is DisplayType.NOW_PLAYING:
+            # Plumbing only: this card is pushed by whatever ends up driving
+            # playback (see docs/SPOTIFY.md). Nothing in this repo plays audio
+            # from it -- it is a picture of what is playing, not a player.
+            _require_str(p, "title")
+            _optional_str(p, "artist")
+            _optional_str(p, "album")
+            art = _optional_str(p, "art_url")
+            if art is not None and not art.startswith(
+                ("http://", "https://", "data:image/")
+            ):
+                raise ProtocolError(
+                    "payload.art_url must be http(s):// or a data:image/ URI"
+                )
+            progress = _optional_number(p, "progress_s")
+            duration = _optional_number(p, "duration_s")
+            if progress is not None and progress < 0:
+                raise ProtocolError("payload.progress_s must not be negative")
+            if duration is not None and duration <= 0:
+                raise ProtocolError("payload.duration_s must be positive")
+            is_playing = p.get("is_playing")
+            if is_playing is not None and not isinstance(is_playing, bool):
+                raise ProtocolError("payload.is_playing must be true or false")
 
 
 def _require_str(payload: dict[str, Any], key: str) -> str:
@@ -286,6 +349,15 @@ def _optional_str(payload: dict[str, Any], key: str) -> str | None:
     if not isinstance(value, str):
         raise ProtocolError(f"payload.{key} must be a string when present")
     return value
+
+
+def _optional_number(payload: dict[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolError(f"payload.{key} must be a number when present")
+    return float(value)
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +403,7 @@ class Hello(Message):
     device_id: str
     app_version: str = "unknown"
     protocol_version: int = PROTOCOL_VERSION
+    protocol_minor: int = PROTOCOL_MINOR
     capabilities: dict[str, Any] = field(default_factory=dict)
 
     def fields(self) -> dict[str, Any]:
@@ -338,6 +411,7 @@ class Hello(Message):
             "device_id": self.device_id,
             "app_version": self.app_version,
             "protocol_version": self.protocol_version,
+            "protocol_minor": self.protocol_minor,
             "capabilities": self.capabilities,
         }
 
@@ -406,6 +480,7 @@ class Welcome(Message):
     TYPE: ClassVar[MsgType] = MsgType.WELCOME
 
     protocol_version: int = PROTOCOL_VERSION
+    protocol_minor: int = PROTOCOL_MINOR
     heartbeat_interval_s: float = 15.0
     audio_up_rate: int = AUDIO_UP_RATE
     audio_down_rate: int = AUDIO_DOWN_RATE
@@ -414,6 +489,7 @@ class Welcome(Message):
     def fields(self) -> dict[str, Any]:
         return {
             "protocol_version": self.protocol_version,
+            "protocol_minor": self.protocol_minor,
             "heartbeat_interval_s": self.heartbeat_interval_s,
             "audio_up_rate": self.audio_up_rate,
             "audio_down_rate": self.audio_down_rate,
@@ -514,6 +590,192 @@ class Video(Message):
         }
 
 
+# ---------------------------------------------------------------------------
+# Alarms and timers (v1.1)
+#
+# The device owns the schedule. The server can ask it to change (``alarm_command``)
+# and is told what happened (``alarm_state``, ``alarm_fired``), but it holds no
+# authoritative copy and nothing here is required for an alarm to ring -- with
+# the PC off the device still wakes the household on time.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AlarmEntry:
+    """One alarm or timer as the device currently holds it.
+
+    Alarms carry ``time_epoch_ms`` (the next fire time) and, when repeating,
+    ``days``. Timers carry ``remaining_s`` against the original ``duration_s``.
+    """
+
+    id: str
+    kind: AlarmKind
+    label: str = ""
+    time_epoch_ms: int = 0
+    days: list[str] = field(default_factory=list)
+    enabled: bool = True
+    duration_s: float = 0.0
+    remaining_s: float = 0.0
+    ringing: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind.value,
+            "label": self.label,
+            "time_epoch_ms": self.time_epoch_ms,
+            "days": list(self.days),
+            "enabled": self.enabled,
+            "duration_s": self.duration_s,
+            "remaining_s": self.remaining_s,
+            "ringing": self.ringing,
+        }
+
+    @staticmethod
+    def from_dict(data: Any) -> "AlarmEntry":
+        if not isinstance(data, dict):
+            raise ProtocolError("alarm entry must be a JSON object")
+        entry_id = data.get("id")
+        if not isinstance(entry_id, str) or not entry_id:
+            raise ProtocolError("alarm entry needs a non-empty string id")
+        try:
+            kind = AlarmKind(data.get("kind"))
+        except ValueError:
+            raise ProtocolError(
+                f"alarm entry kind must be alarm|timer (got {data.get('kind')!r})"
+            ) from None
+        return AlarmEntry(
+            id=entry_id,
+            kind=kind,
+            label=str(data.get("label", "")),
+            time_epoch_ms=int(data.get("time_epoch_ms", 0) or 0),
+            days=_clean_days(data.get("days")),
+            enabled=bool(data.get("enabled", True)),
+            duration_s=float(data.get("duration_s", 0) or 0),
+            remaining_s=float(data.get("remaining_s", 0) or 0),
+            ringing=bool(data.get("ringing", False)),
+        )
+
+
+def _clean_days(raw: Any) -> list[str]:
+    """Normalise a days list, rejecting anything not in ``DAY_NAMES``.
+
+    Order is normalised to Monday-first so ``["sun","mon"]`` and ``["mon","sun"]``
+    compare equal and read the same way back to the user.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise ProtocolError("days must be a list of mon|tue|wed|thu|fri|sat|sun")
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str) or item.lower() not in DAY_NAMES:
+            raise ProtocolError(
+                f"days entries must be one of {'|'.join(DAY_NAMES)} (got {item!r})"
+            )
+        seen.add(item.lower())
+    return [day for day in DAY_NAMES if day in seen]
+
+
+@dataclass
+class AlarmCommand(Message):
+    """server -> device: change the local schedule.
+
+    ``req_id`` is not in the brief's field list but is what makes the Gemini
+    tool handler correct: it waits for the ``alarm_state`` carrying the same
+    ``req_id`` rather than for whichever state happens to arrive next, so an
+    unsolicited push (a timer ticking down) cannot be mistaken for the ack.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.ALARM_COMMAND
+
+    op: AlarmOp = AlarmOp.LIST
+    id: str = ""
+    label: str = ""
+    time_epoch_ms: int = 0
+    days: list[str] = field(default_factory=list)
+    duration_s: float = 0.0
+    # cancel only: narrow the target to one kind. Empty means "either".
+    kind: str = ""
+    req_id: str = ""
+
+    def __post_init__(self) -> None:
+        self.days = _clean_days(self.days)
+        self.label = self.label[:MAX_ALARM_LABEL_CHARS]
+        if self.op is AlarmOp.SET_ALARM and self.time_epoch_ms <= 0:
+            raise ProtocolError("set_alarm needs a positive time_epoch_ms")
+        if self.op is AlarmOp.SET_TIMER:
+            if self.duration_s <= 0:
+                raise ProtocolError("set_timer needs a positive duration_s")
+            if self.duration_s > MAX_TIMER_DURATION_S:
+                raise ProtocolError(
+                    f"set_timer duration_s must be <= {MAX_TIMER_DURATION_S}"
+                )
+        if self.kind and self.kind not in (k.value for k in AlarmKind):
+            raise ProtocolError("kind must be alarm|timer when present")
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "op": self.op.value,
+            "id": self.id,
+            "label": self.label,
+            "time_epoch_ms": self.time_epoch_ms,
+            "days": list(self.days),
+            "duration_s": self.duration_s,
+            "kind": self.kind,
+            "req_id": self.req_id,
+        }
+
+
+@dataclass
+class AlarmStateMsg(Message):
+    """device -> server: the whole schedule, after any change and on request.
+
+    Sent as a full snapshot rather than a delta. There is one device and at most
+    a handful of entries, so re-sending everything removes a class of drift bugs
+    for a few hundred bytes.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.ALARM_STATE
+
+    alarms: list[AlarmEntry] = field(default_factory=list)
+    timers: list[AlarmEntry] = field(default_factory=list)
+    req_id: str = ""
+    # False when Android denies SCHEDULE_EXACT_ALARM: the device will still
+    # ring, but possibly late, and the model should say so rather than promise
+    # an exact time it cannot keep.
+    exact_allowed: bool = True
+    error: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "alarms": [a.to_dict() for a in self.alarms],
+            "timers": [t.to_dict() for t in self.timers],
+            "req_id": self.req_id,
+            "exact_allowed": self.exact_allowed,
+            "error": self.error,
+        }
+
+
+@dataclass
+class AlarmFired(Message):
+    """device -> server: something just went off, and is ringing locally.
+
+    Purely informational. The chime is already playing on the device by the
+    time this is sent -- it is what lets Gemini say "your timer is up", not what
+    makes the noise.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.ALARM_FIRED
+
+    kind: AlarmKind = AlarmKind.ALARM
+    id: str = ""
+    label: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {"kind": self.kind.value, "id": self.id, "label": self.label}
+
+
 _DECODERS: dict[str, Any] = {}
 
 
@@ -536,6 +798,9 @@ for _cls in (
     Display,
     DisplayClear,
     Video,
+    AlarmCommand,
+    AlarmStateMsg,
+    AlarmFired,
 ):
     _register(_cls)
 
@@ -579,6 +844,8 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             device_id=device_id,
             app_version=str(data.get("app_version", "unknown")),
             protocol_version=int(data.get("protocol_version", PROTOCOL_VERSION)),
+            # A v1.0 client omits this entirely; absence means 0, not an error.
+            protocol_minor=int(data.get("protocol_minor", 0)),
             capabilities=data.get("capabilities") or {},
             ts=ts,
         )
@@ -607,6 +874,7 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
     if cls is Welcome:
         return Welcome(
             protocol_version=int(data.get("protocol_version", PROTOCOL_VERSION)),
+            protocol_minor=int(data.get("protocol_minor", 0)),
             heartbeat_interval_s=float(data.get("heartbeat_interval_s", 15.0)),
             audio_up_rate=int(data.get("audio_up_rate", AUDIO_UP_RATE)),
             audio_down_rate=int(data.get("audio_down_rate", AUDIO_DOWN_RATE)),
@@ -637,6 +905,47 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             width=int(data.get("width", VIDEO_EDGE)),
             height=int(data.get("height", VIDEO_EDGE)),
             jpeg_quality=int(data.get("jpeg_quality", 80)),
+            ts=ts,
+        )
+    if cls is AlarmCommand:
+        try:
+            op = AlarmOp(data.get("op"))
+        except ValueError:
+            allowed = "|".join(o.value for o in AlarmOp)
+            raise ProtocolError(
+                f"alarm_command.op must be one of {allowed} (got {data.get('op')!r})"
+            ) from None
+        return AlarmCommand(
+            op=op,
+            id=str(data.get("id", "")),
+            label=str(data.get("label", "")),
+            time_epoch_ms=int(data.get("time_epoch_ms", 0) or 0),
+            days=data.get("days"),
+            duration_s=float(data.get("duration_s", 0) or 0),
+            kind=str(data.get("kind", "")),
+            req_id=str(data.get("req_id", "")),
+            ts=ts,
+        )
+    if cls is AlarmStateMsg:
+        return AlarmStateMsg(
+            alarms=[AlarmEntry.from_dict(a) for a in data.get("alarms") or []],
+            timers=[AlarmEntry.from_dict(t) for t in data.get("timers") or []],
+            req_id=str(data.get("req_id", "")),
+            exact_allowed=bool(data.get("exact_allowed", True)),
+            error=str(data.get("error", "")),
+            ts=ts,
+        )
+    if cls is AlarmFired:
+        try:
+            kind = AlarmKind(data.get("kind"))
+        except ValueError:
+            raise ProtocolError(
+                f"alarm_fired.kind must be alarm|timer (got {data.get('kind')!r})"
+            ) from None
+        return AlarmFired(
+            kind=kind,
+            id=str(data.get("id", "")),
+            label=str(data.get("label", "")),
             ts=ts,
         )
     raise ProtocolError(f"no decoder wired for {cls.__name__}")
