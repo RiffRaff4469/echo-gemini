@@ -28,7 +28,16 @@ def clean_env():
     saved = os.environ.copy()
     for name in list(os.environ):
         if name.startswith(
-            ("ECHO_", "GEMINI_", "WAKE_", "VISION_", "SESSION_", "MIC_", "WEATHER_")
+            (
+                "ECHO_",
+                "GEMINI_",
+                "WAKE_",
+                "VISION_",
+                "SESSION_",
+                "POST_ANSWER_",
+                "MIC_",
+                "WEATHER_",
+            )
         ):
             del os.environ[name]
     try:
@@ -128,6 +137,24 @@ def test_non_numeric_value_is_fatal(tmp_path) -> None:
         )
 
 
+def test_post_answer_window_defaults_to_a_few_seconds(tmp_path) -> None:
+    """The default has to be short enough that walking away after a quick
+    question actually ends the session, and long enough to ask a follow-up."""
+    cfg = load_config(write_env(tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\n"))
+    assert 3.0 <= cfg.post_answer_silence_s <= 15.0
+    assert cfg.post_answer_silence_s < cfg.session_idle_timeout_s
+
+
+def test_post_answer_window_from_the_env_file(tmp_path) -> None:
+    cfg = load_config(
+        write_env(
+            tmp_path,
+            "ECHO_SHARED_SECRET=a-long-enough-secret\nPOST_ANSWER_SILENCE_S=0\n",
+        )
+    )
+    assert cfg.post_answer_silence_s == 0.0
+
+
 def test_weather_defaults_to_syracuse(tmp_path) -> None:
     cfg = load_config(write_env(tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\n"))
     assert cfg.weather_enabled is True
@@ -208,6 +235,8 @@ def test_env_example_lists_every_documented_var() -> None:
         "GEMINI_MEDIA_RESOLUTION",
         "SESSION_IDLE_TIMEOUT",
         "SESSION_MAX_DURATION",
+        "SESSION_END_TURN_SILENCE_S",
+        "POST_ANSWER_SILENCE_S",
         "WAKE_ENABLED",
         "WAKE_MODEL",
         "WAKE_THRESHOLD",

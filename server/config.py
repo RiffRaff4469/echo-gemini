@@ -87,6 +87,15 @@ class Config:
     # without this the model never answers (see gemini_live._pump_end_turn).
     # 0 disables the explicit turn-end.
     session_end_turn_silence_s: float = 1.2
+    # How long the session waits after the model has FINISHED answering before
+    # it closes itself. This is what makes a quick question cost about ten
+    # seconds instead of two minutes, and -- because the live mic stops being
+    # streamed the moment the session ends -- it is also what stops the device
+    # relaying the rest of the room's conversation to the model. Nothing here
+    # can cut an answer short: the window only starts once the model has
+    # stopped speaking (see gemini_live._watchdog). 0 disables it, leaving
+    # SESSION_IDLE_TIMEOUT as the only close.
+    post_answer_silence_s: float = 8.0
 
     # --- wake word ----------------------------------------------------------
     wake_enabled: bool = True
@@ -143,7 +152,8 @@ class Config:
             f"wake={self.wake_model if self.wake_enabled else 'off'} "
             f"vision={self.vision_mode} "
             f"weather={f'{self.weather_lat:.3f},{self.weather_lon:.3f}' if self.weather_enabled else 'off'} "
-            f"idle_close={self.session_idle_timeout_s:g}s"
+            f"idle_close={self.session_idle_timeout_s:g}s "
+            f"quiet_close={self.post_answer_silence_s:g}s"
         )
 
 
@@ -174,6 +184,7 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         session_idle_timeout_s=_env_float("SESSION_IDLE_TIMEOUT", 120.0),
         session_max_duration_s=_env_float("SESSION_MAX_DURATION", 600.0),
         session_end_turn_silence_s=_env_float("SESSION_END_TURN_SILENCE_S", 1.2),
+        post_answer_silence_s=_env_float("POST_ANSWER_SILENCE_S", 8.0),
         wake_enabled=_env_bool("WAKE_ENABLED", True),
         wake_model=_env("WAKE_MODEL", "alexa"),
         wake_threshold=_env_float("WAKE_THRESHOLD", 0.5),

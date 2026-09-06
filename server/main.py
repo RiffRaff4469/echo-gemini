@@ -246,6 +246,18 @@ class Hub:
         if self.link:
             self.link.send_msg(P.Mic(enabled=enabled, gain=self.cfg.mic_gain))
 
+    async def set_quiet(self, active: bool, closes_in_s: float) -> None:
+        """Tell the device how long the post-answer window has left.
+
+        Rounded because the device only uses it to arm a fade-in a few seconds
+        before the close; sub-millisecond precision would just be noise on the
+        wire and in the logs.
+        """
+        if self.link:
+            self.link.send_msg(
+                P.SessionQuiet(active=active, closes_in_s=round(closes_in_s, 2))
+            )
+
     async def set_vision(self, enabled: bool) -> None:
         if not self.link:
             return
@@ -278,6 +290,8 @@ class Hub:
             link.send_msg(P.Pong(nonce=msg.nonce))
         elif isinstance(msg, P.Tap):
             await self._on_tap(msg)
+        elif isinstance(msg, P.Stay):
+            await self._on_stay()
         elif isinstance(msg, P.CameraStatusMsg):
             await self._on_camera_status(msg)
         elif isinstance(msg, P.AlarmStateMsg):
@@ -376,6 +390,30 @@ class Hub:
         await self.set_state(UiState.LISTENING)
         await self.session.start("tap")
 
+    async def _on_stay(self) -> None:
+        """A tap while a session is already up: keep talking (protocol v1.3).
+
+        Separate from ``tap``, which OPENS a session, so the two intents cannot
+        be confused -- and so an older client that only sends ``tap`` keeps
+        behaving exactly as it did. The race is real and cheap to lose well: a
+        finger that lands the instant the quiet window expires arrives here with
+        the session already gone, and starting one is what the user meant
+        anyway.
+        """
+        if not self.session.active:
+            log.info("tap-to-stay arrived after the close; opening a session instead")
+            await self.set_state(UiState.LISTENING)
+            await self.session.start("stay-after-close")
+            return
+        if self.session.extend_stay():
+            left = self.session.quiet_seconds_left
+            log.info(
+                "tap-to-stay: %s",
+                f"{left:.0f}s before the session closes"
+                if left is not None
+                else "session held open",
+            )
+
     async def _on_alarm_fired(self, msg: P.AlarmFired) -> None:
         """The device is already ringing; this is only so Gemini can say so.
 
@@ -461,6 +499,9 @@ class Hub:
             )
 
     def status(self) -> dict[str, Any]:
+        # Null unless the model has finished answering and the session is
+        # counting down to its own close -- see gemini_live._watchdog.
+        closes_in = self.session.quiet_seconds_left if self.session.active else None
         return {
             "ok": True,
             "time": _now_iso(),
@@ -472,6 +513,9 @@ class Hub:
             "session_active": self.session.active,
             "session_idle_s": (
                 round(self.session.idle_seconds, 1) if self.session.active else None
+            ),
+            "session_closes_in_s": (
+                round(closes_in, 1) if closes_in is not None else None
             ),
             "vision_mode": self.cfg.vision_mode,
             "vision_streaming": self.session.vision_on,

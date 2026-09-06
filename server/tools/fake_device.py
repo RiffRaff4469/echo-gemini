@@ -250,6 +250,8 @@ class FakeDevice:
         self.schedule = FakeSchedule()
         self.alarm_commands = 0
         self.chimes = 0
+        self.quiet_windows = 0
+        self.stays_left = int(getattr(args, "stay", 0) or 0)
         self._camera_task: asyncio.Task | None = None
         self._alarm_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -368,6 +370,8 @@ class FakeDevice:
             )
         elif isinstance(msg, P.DisplayClear):
             say("<- display_clear -- back to the ambient clock")
+        elif isinstance(msg, P.SessionQuiet):
+            await self._on_session_quiet(msg)
         elif isinstance(msg, P.Video):
             await self._on_video(msg)
         elif isinstance(msg, P.AlarmCommand):
@@ -376,6 +380,23 @@ class FakeDevice:
             say(f"<- ERROR    {msg.code}: {msg.message}")
         else:
             say(f"<- {msg.TYPE.value} {msg.fields()}")
+
+    async def _on_session_quiet(self, msg: P.SessionQuiet) -> None:
+        """The answer is over and the server is counting down to the close.
+
+        On the real device this is what fades in the "tap to keep talking"
+        hint. Here it is also how ``--stay`` is driven, so the tap-to-stay path
+        can be smoke-tested without a touchscreen.
+        """
+        if not msg.active:
+            say("<- session_quiet ended -- conversation continues")
+            return
+        self.quiet_windows += 1
+        say(f"<- session_quiet -- closing in {msg.closes_in_s:g}s unless something happens")
+        if self.stays_left > 0:
+            self.stays_left -= 1
+            say("-> stay (tap to keep talking)")
+            await self.send(P.Stay())
 
     def _on_binary(self, raw: bytes) -> None:
         try:
@@ -573,6 +594,7 @@ class FakeDevice:
         say(f"video frames sent         : {self.frames_sent}")
         say(f"alarm commands received   : {self.alarm_commands}")
         say(f"local chimes rung         : {self.chimes}")
+        say(f"post-answer windows       : {self.quiet_windows}")
         reply_s = len(self.reply_audio) / (P.AUDIO_DOWN_RATE * 2)
         say(f"model audio received      : {reply_s:.1f}s in {self.reply_chunks} chunks")
         if self.reply_audio and self.args.save_reply:
@@ -628,6 +650,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="start a local timer of N seconds at startup, as if set on-screen",
+    )
+    parser.add_argument(
+        "--stay",
+        type=int,
+        default=0,
+        help=(
+            "tap to keep talking N times: send a stay envelope each time the "
+            "server announces the post-answer quiet window"
+        ),
     )
     parser.add_argument("--save-reply", help="write the model's audio to this WAV")
     return parser.parse_args(argv)

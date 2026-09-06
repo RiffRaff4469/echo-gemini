@@ -23,6 +23,7 @@ import protocol as P
         P.Pong(nonce=7),
         P.Tap(pressed=True),
         P.Tap(pressed=False),
+        P.Stay(),
         P.CameraStatusMsg(status=P.CameraStatus.SHUTTER_CLOSED, detail="near-black"),
         P.DeviceLog(level="warn", message="battery? there is none"),
         P.ErrorMsg(code="camera_open_failed", message="in use"),
@@ -34,6 +35,8 @@ import protocol as P
         P.Interrupt(),
         P.DisplayClear(),
         P.Video(enabled=True, fps=1.0, width=768, height=768, jpeg_quality=70),
+        P.SessionQuiet(active=True, closes_in_s=7.5),
+        P.SessionQuiet(active=False, closes_in_s=0.0),
         P.AlarmCommand(op=P.AlarmOp.LIST),
         P.AlarmCommand(
             op=P.AlarmOp.SET_ALARM,
@@ -91,6 +94,8 @@ def test_explicit_timestamp_is_preserved() -> None:
         '{"v":1,"t":"hello","device_id":""}',
         '{"v":1,"t":"state","state":"dancing"}',
         '{"v":1,"t":"camera_status","status":"melted"}',
+        '{"v":1,"t":"session_quiet","active":true,"closes_in_s":"soon"}',
+        '{"v":1,"t":"session_quiet","active":true,"closes_in_s":-3}',
     ],
 )
 def test_malformed_control_messages_raise_protocol_error(raw: str) -> None:

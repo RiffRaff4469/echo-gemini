@@ -1,9 +1,12 @@
 """Gemini Live session lifecycle.
 
-One session at a time, opened on wake or tap and closed on idle. Idle-close is
-cost control, not polish -- Live sessions bill for the duration they are open
-(HANDOFF section 12), and a device that streams gated audio into a session
-nobody is using would bill all day.
+One session at a time, opened on wake or tap and closed as soon as the
+conversation is plainly over -- normally ``POST_ANSWER_SILENCE_S`` after the
+model finishes answering, with ``SESSION_IDLE_TIMEOUT`` behind it as a backstop
+(see ``_watchdog``). Closing promptly is cost control AND privacy, not polish:
+Live sessions bill for the duration they are open (HANDOFF section 12), and for
+as long as one is open the room's microphone is streaming to the model whether
+or not anybody is talking to it.
 
 Data paths, all pass-through -- no resampling anywhere:
 
@@ -73,6 +76,16 @@ AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 _AUDIO_QUEUE_MAX = 200  # ~4 s of 20 ms frames
 _VIDEO_QUEUE_MAX = 3
 
+# One tap on the screen buys this much more conversation. Long enough to gather
+# a thought and ask the follow-up, short enough that a stray elbow does not bill
+# a minute of an empty room.
+STAY_EXTENSION_S = 30.0
+
+# Taps closer together than this are one tap. A finger on a panel that is also
+# showing a fade-in hint produces several ACTION_DOWNs, and each of those must
+# not silently buy another half minute.
+STAY_DEBOUNCE_S = 0.75
+
 
 class SessionSink(Protocol):
     """What a session needs to push back at the device. Implemented by ``Hub``."""
@@ -84,6 +97,7 @@ class SessionSink(Protocol):
     async def set_state(self, state: UiState) -> None: ...
     async def set_mic(self, enabled: bool) -> None: ...
     async def set_vision(self, enabled: bool) -> None: ...
+    async def set_quiet(self, active: bool, closes_in_s: float) -> None: ...
 
 
 class LiveUnavailable(RuntimeError):
@@ -367,6 +381,13 @@ class LiveSessionManager:
         self._last_user_audio_at = 0.0
         self._user_turn_open = False
         self._model_speaking = False
+        # Post-answer quiet window -- see _watchdog. ``_quiet_since`` is 0 when
+        # no window is running, which is the case for all of a session that is
+        # still mid-answer.
+        self._quiet_since = 0.0
+        self._stay_until = 0.0
+        self._last_stay_at = 0.0
+        self._announced_close_at = 0.0
 
     # --- state ------------------------------------------------------------
 
@@ -416,6 +437,10 @@ class LiveSessionManager:
         self._last_user_audio_at = 0.0
         self._user_turn_open = False
         self._model_speaking = False
+        self._quiet_since = 0.0
+        self._stay_until = 0.0
+        self._last_stay_at = 0.0
+        self._announced_close_at = 0.0
         self._started_at = self._clock()
         self.touch()
         log.info("opening Live session (%s) model=%s", reason, self.cfg.gemini_model)
@@ -456,6 +481,89 @@ class LiveSessionManager:
     def idle_seconds(self) -> float:
         return self._clock() - self._last_activity
 
+    # --- the post-answer quiet window -------------------------------------
+
+    @property
+    def quiet_seconds_left(self) -> float | None:
+        """Seconds until the post-answer close, or None when no window is open.
+
+        None is the answer for most of a session: the window exists only
+        between the model finishing an answer and someone continuing.
+        """
+        if not self._quiet_since:
+            return None
+        return max(0.0, self._closes_at() - self._clock())
+
+    def _closes_at(self) -> float:
+        """When the running quiet window will end the session.
+
+        A tap pushes ``_stay_until`` out past the plain window, so the later of
+        the two is the real deadline -- one tap during a five-second window must
+        not be undone by the window's own arithmetic.
+        """
+        return max(
+            self._quiet_since + self.cfg.post_answer_silence_s, self._stay_until
+        )
+
+    def _open_quiet_window(self) -> None:
+        """The model just finished answering: start counting down to the close.
+
+        Only ever called from ``_pump_down`` on ``turn_complete``, which is the
+        one point where the model is definitively not speaking. Everything that
+        counts as the conversation continuing -- more model audio, user speech,
+        a barge-in -- clears it again, so a window can never be running while an
+        answer is in flight.
+        """
+        if self.cfg.post_answer_silence_s <= 0:
+            return  # disabled; SESSION_IDLE_TIMEOUT remains the only close
+        if not self._quiet_since:
+            self._quiet_since = self._clock()
+
+    def _cancel_quiet_window(self) -> None:
+        """The conversation continued. Forget the deadline entirely.
+
+        ``_stay_until`` survives on purpose: a tap made during an answer should
+        still be honoured by the window that opens when the answer ends.
+        """
+        self._quiet_since = 0.0
+
+    def extend_stay(self) -> bool:
+        """Tap-to-stay: hold this session open for another ``STAY_EXTENSION_S``.
+
+        Returns False for a bounced duplicate tap, so the caller can log one
+        extension rather than four. Also re-arms the idle timer -- a tap is a
+        person at the display, which is exactly what ``SESSION_IDLE_TIMEOUT``
+        is trying to detect the absence of.
+        """
+        now = self._clock()
+        if now - self._last_stay_at < STAY_DEBOUNCE_S:
+            return False
+        self._last_stay_at = now
+        self._stay_until = max(self._stay_until, now) + STAY_EXTENSION_S
+        self.touch()
+        return True
+
+    async def _publish_quiet(self, now: float) -> None:
+        """Keep the device's copy of the deadline in step with ours.
+
+        Sent only when the deadline actually moves, so a window that simply
+        counts down costs one message at each end of it rather than one per
+        watchdog tick.
+        """
+        target = self._closes_at() if self._quiet_since else 0.0
+        if target == self._announced_close_at:
+            return
+        self._announced_close_at = target
+        try:
+            if target:
+                await self.sink.set_quiet(True, max(0.0, target - now))
+            else:
+                await self.sink.set_quiet(False, 0.0)
+        except Exception:
+            # A hint the device never receives is a missing hint, not a reason
+            # to take the conversation down.
+            log.exception("failed to push the quiet-window hint")
+
     # --- ingress ----------------------------------------------------------
 
     def feed_audio(self, pcm: bytes) -> None:
@@ -464,6 +572,10 @@ class LiveSessionManager:
             return
         if self._vad.feed(pcm):
             self._last_activity = self._clock()
+            # Speaking again inside the post-answer window is a follow-up, not
+            # a race against the close: the window goes away and the session
+            # carries on turn by turn.
+            self._cancel_quiet_window()
         try:
             self._audio_q.put_nowait(pcm)
         except asyncio.QueueFull:
@@ -551,6 +663,10 @@ class LiveSessionManager:
                 if self._vision_on:
                     self._vision_on = False
                     await self.sink.set_vision(False)
+                # The window is over one way or another; a hint left fading in
+                # on a device whose session has already gone is a lie.
+                self._cancel_quiet_window()
+                await self._publish_quiet(self._clock())
                 await self.sink.set_mic(True)
                 await self.sink.set_state(UiState.IDLE)
             except Exception:
@@ -665,6 +781,7 @@ class LiveSessionManager:
                     log.info("barge-in: flushing device playback")
                     self._model_speaking = False
                     self._last_activity = self._clock()
+                    self._cancel_quiet_window()
                     await self.sink.send_interrupt()
                     await self.sink.set_mic(True)
                     await self.sink.set_state(UiState.LISTENING)
@@ -675,6 +792,10 @@ class LiveSessionManager:
                     # The model answered, so there is no open user turn left to
                     # close -- and no turn-end may be sent over its voice.
                     self._user_turn_open = False
+                    # Model output is activity in its own right. Counting it is
+                    # what lets a long answer run past POST_ANSWER_SILENCE_S --
+                    # and past SESSION_IDLE_TIMEOUT -- without being cut off.
+                    self._cancel_quiet_window()
                     if not self._model_speaking:
                         self._model_speaking = True
                         # Half-duplex: close the mic while we talk rather than
@@ -690,6 +811,11 @@ class LiveSessionManager:
                         self._model_speaking = False
                         self._user_turn_open = False
                         self._last_activity = self._clock()
+                        # The answer is finished. From here the session has
+                        # POST_ANSWER_SILENCE_S to be given a reason to stay
+                        # open; otherwise the watchdog closes it and the mic
+                        # stops being streamed anywhere.
+                        self._open_quiet_window()
                         await self.sink.set_mic(True)
                         await self.sink.set_state(UiState.LISTENING)
 
@@ -712,6 +838,10 @@ class LiveSessionManager:
     async def _handle_tool_calls(self, session: Any, calls: list[Any]) -> None:
         from google.genai import types
 
+        # A tool call is the model still working on the answer, and a slow one
+        # (an alarm waiting on the device to ack) can outlast the quiet window.
+        self._last_activity = self._clock()
+        self._cancel_quiet_window()
         responses = []
         for call in calls:
             result = await self._run_tool(call)
@@ -836,6 +966,9 @@ class LiveSessionManager:
         )
         log.info("relaying %s fired to the model", kind.value)
         self.touch()
+        # The model is about to say something unprompted; do not close out from
+        # under it because the quiet window happened to be counting down.
+        self._cancel_quiet_window()
         try:
             await session.send_realtime_input(text=text)
         except Exception:
@@ -881,17 +1014,37 @@ class LiveSessionManager:
             log.debug("said: %s", said.text)
 
     async def _watchdog(self) -> None:
-        """Close the session when it goes quiet, or when it runs too long.
+        """Close the session when the conversation is over, or when it overruns.
 
-        This is the billing control. ``SESSION_IDLE_TIMEOUT`` (default 120 s) of
-        no speech in either direction ends the session; the next wake word or
-        tap opens a fresh one.
+        Three closes, in the order they normally fire:
+
+        * **The post-answer quiet window** (``POST_ANSWER_SILENCE_S``, ~8 s) is
+          the one that matters day to day. It starts only when the model has
+          finished answering and ends the session unless the user speaks again
+          or taps the screen. A quick question therefore costs about ten
+          seconds of billed session, and -- just as importantly -- the mic
+          stops being streamed to the model straight afterwards, so the
+          conversation someone has next to the display is not sent anywhere.
+        * **``SESSION_IDLE_TIMEOUT``** (120 s) remains the backstop for a
+          session that never gets an answer out of the model at all, and the
+          only close when the quiet window is disabled.
+        * **``SESSION_MAX_DURATION``** is the hard ceiling. It is the sole rule
+          here that can fire mid-answer, deliberately: it is the last defence
+          against a session that never ends, and at ten minutes an answer still
+          running into it has already gone wrong.
+
+        Nothing else can cut an answer short. While ``_model_speaking`` is true
+        the idle clock is held open and no quiet window can exist, so a long
+        reply always completes.
         """
         idle_limit = self.cfg.session_idle_timeout_s
         max_duration = self.cfg.session_max_duration_s
-        # Check often enough that whichever limit is shorter is honoured
-        # promptly, but not so often that an idle server spins.
-        limits = [x for x in (idle_limit, max_duration) if x > 0]
+        quiet_limit = self.cfg.post_answer_silence_s
+        # Check often enough that whichever limit is shortest is honoured
+        # promptly, but not so often that an idle server spins. The quiet
+        # window is in the list because the device's "tap to keep talking" hint
+        # is armed off this tick, and a late hint is a hint nobody can act on.
+        limits = [x for x in (idle_limit, max_duration, quiet_limit) if x > 0]
         tick = min(1.0, max(0.05, min(limits) / 4)) if limits else 1.0
         while not self._stop.is_set():
             try:
@@ -899,10 +1052,29 @@ class LiveSessionManager:
                 return
             except asyncio.TimeoutError:
                 pass
+
+            now = self._clock()
+            if self._model_speaking:
+                # An answer in flight. Hold both soft clocks open rather than
+                # merely ignoring them, so a reply longer than the idle timeout
+                # does not close the instant it finishes.
+                self._last_activity = now
+                self._cancel_quiet_window()
+
+            await self._publish_quiet(now)
+
+            if max_duration > 0 and (now - self._started_at) >= max_duration:
+                log.info("session hit SESSION_MAX_DURATION (%.0fs) -- closing", max_duration)
+                return
+            if self._model_speaking:
+                continue
+            if self._quiet_since and now >= self._closes_at():
+                log.info(
+                    "quiet for %.1fs after the answer -- closing back to ambient",
+                    now - self._quiet_since,
+                )
+                return
             idle = self.idle_seconds
             if idle_limit > 0 and idle >= idle_limit:
                 log.info("idle for %.0fs -- closing billed session", idle)
-                return
-            if max_duration > 0 and (self._clock() - self._started_at) >= max_duration:
-                log.info("session hit SESSION_MAX_DURATION (%.0fs) -- closing", max_duration)
                 return
