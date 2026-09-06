@@ -242,3 +242,40 @@ adb -s <serial> shell cat /proc/meminfo | head -1      # RECORD ACTUAL RAM → d
 | Bootloop after boot-root | wrong boot-root.img (cronos package or wrong gen) |
 | Backup "restored" and device dead | pre-2.x backup onto 2.x device — partition layout differs |
 | `su` denied | Magisk SharedUID Shell entry toggled off, or need Direct-install re-patch (§10) |
+
+## 15. Field corrections — 2026-09-06 session (READ BEFORE REUSING THIS RUNBOOK)
+
+A full Phase-1 execution (unlock → rooted LOS v0.6) completed 2026-09-06. It exposed
+errors in earlier sections of this file. Full detail + evidence: `docs/PHASE1-HANDOFF.md` §6.
+**Where they conflict, this section wins.**
+
+1. **G3 (cable test) as written is unsatisfiable.** Stock Fire OS on this unit has NO
+   USB-debugging toggle → `adb devices` can never enumerate pre-exploit. Substitute a
+   *continuous* watch (`sudo dmesg -wH | grep -iE 'usb|mediatek|preloader'`), started
+   before power-on. The device **alternates USB identities every few seconds**
+   (`0bb4:0c01` Android ↔ `0e8d:2000` MT65xx PreLoader → ttyACM0); `lsusb` is a snapshot
+   and reads as a false "charge-only cable" negative.
+2. **ModemManager must be stopped on EVERY live-session boot**, not once — it reclaims
+   ttyACM0 and amonet hard-exits.
+3. **Stream images with `cat`, never `dd`, over `adb exec-out`** — `dd` merges its
+   "records in/out" stderr into the stream (92 stray bytes observed → corrupt backups).
+   TWRP's toybox `dd` also rejects `bs=1M` (use plain bytes).
+4. **TWRP wipe/push order: wipe FIRST, then push ROM.** `/sdcard` IS userdata; the old
+   §8 order (push → wipe data) can delete the ROM just pushed.
+5. **TWRP's on-device backup is not viable on this unit** (needs 2356 MB, only 1795 MB
+   free — it images the storage it writes to). Stream to the host instead (`cat` method),
+   which also captures `boot0`/`boot1` that TWRP misses.
+6. **Ventoy data partition = `sda1` (not sdX2); `sda2` = 32M ESP. Mount `/dev/mapper/sda1`**
+   — the raw node is EBUSY under Ventoy's device-mapper. Mount root-owned: add
+   `-o uid=$(id -u),gid=$(id -g),umask=000`. `findmnt -S` doesn't exist in the live
+   session; use `/proc/mounts`.
+7. **Mute-button mode entry did not work on this unit.** Reliable routes: fastboot from
+   TWRP = `adb reboot bootloader`; recovery from fastboot = `fastboot reboot recovery`;
+   physical TWRP = Volume Up at power-on.
+8. **ROM checksums live in the GitHub release BODY for checkers v0.5+** (v0.1–v0.4 ship a
+   `.sha256sum` asset). Query the releases API, don't 404 on an asset URL.
+9. **adb permissions change per mode on Linux** (VID differs LOS vs TWRP). Cover all three
+   VIDs (`18d1`, `0e8d`, `0bb4`) in a udev rule or run adbd as root. Restarting the server
+   regenerates the adb key → re-accept the on-device RSA prompt.
+10. **Backup order: take the full backup BEFORE flashing `boot-root.img`** (flashing
+    overwrites stock boot; a post-flash backup captures a modified boot).
