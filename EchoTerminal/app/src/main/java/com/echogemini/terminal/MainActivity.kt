@@ -31,20 +31,30 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The launcher. Boots straight into the ambient clock and stays there.
+ * The launcher. Boots straight into the ambient display and stays there.
  *
  * ## Layering
  *
  * ```
- *   StatusOverlay   state + CAMERA ON indicator   (always on top)
- *   PushSurface     WebView, pushed content       (fades in and out)
- *   AmbientClock    local clock, no network       (always present)
+ *   StatusOverlay   CAMERA ON indicator            (always on top)
+ *   ScheduleScreen  alarms and timers, native
+ *   AmbientWeb      the ported ambient UI          (UI-BRIEF-9, preferred)
+ *   canvasLayer     AmbientClock + tiles + push    (UI-BRIEF-4, the fallback)
  * ```
  *
- * The ordering matters twice. The clock is the base layer and is never removed,
- * so link state can never leave a blank screen. The camera indicator is above
- * the push surface, so no pushed HTML can cover up the fact that the camera is
- * streaming.
+ * The ordering matters twice. There is always an ambient layer under
+ * everything, so link state can never leave a blank screen. The camera
+ * indicator is above every surface that can render server content, so nothing
+ * pushed -- into the WebView or the Canvas -- can cover up the fact that the
+ * camera is streaming.
+ *
+ * ## Two ambients, one at a time
+ *
+ * [AmbientWeb] is the display. The Canvas ambient stays compiled in and takes
+ * over whenever the WebView cannot: the custom ROM has the system WebView
+ * removed, so "there is no WebView" is a real configuration, not a
+ * theoretical one. Both are built here; exactly one is visible, and the
+ * switch is one-way per boot (see [enterCanvasMode]).
  *
  * ## What must survive the server being off
  *
@@ -56,13 +66,19 @@ import kotlin.math.min
 class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks {
 
     private lateinit var root: FrameLayout
+    private lateinit var canvasLayer: FrameLayout
     private lateinit var clock: AmbientClock
-    private lateinit var push: PushSurface
     private lateinit var statusBar: StatusOverlay
     private lateinit var scheduler: AlarmScheduler
     private lateinit var scheduleScreen: ScheduleScreen
     private lateinit var alarmTile: Button
     private lateinit var timerTile: Button
+
+    /** The WebView ambient, or null once (or if ever) it failed. */
+    private var web: AmbientWeb? = null
+
+    /** Only exists in Canvas mode; the WebView ambient renders its own cards. */
+    private var push: PushSurface? = null
 
     private var link: Link? = null
     private var capture: AudioCapture? = null
@@ -109,7 +125,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 scheduleScreen.back()
-                push.fadeToClock("back")
+                push?.fadeToClock("back")
+                web?.displayClear()
             }
         })
 
@@ -124,20 +141,23 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     }
 
     /**
-     * The clock is built and shown before anything network- or hardware-related
-     * is touched, and the order is not incidental.
+     * The ambient layer is built and shown before anything network- or
+     * hardware-related is touched, and the order is not incidental.
      *
-     * The ambient layer is full-bleed rather than sharing the screen with a row
-     * of buttons: its gradient IS the background, so anything sitting in a
-     * separate slot below it would be a black bar under a sky. The alarm and
-     * timer tiles are instead translucent chips floated over the bottom-right
-     * corner, opposite the weather card the clock draws bottom-left.
+     * The Canvas fallback is assembled first and in full, then hidden if the
+     * WebView starts. Building it either way costs a handful of views and no
+     * ticking timer, and it means a WebView that dies an hour from now is a
+     * `visibility` change rather than a screen that has to be constructed
+     * while it is already blank.
      */
     private fun buildUi() {
         root = FrameLayout(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
 
+        canvasLayer = FrameLayout(this)
+        root.addView(canvasLayer, FrameLayout.LayoutParams(-1, -1))
+
         clock = AmbientClock(this)
-        root.addView(clock, FrameLayout.LayoutParams(-1, -1))
+        canvasLayer.addView(clock, FrameLayout.LayoutParams(-1, -1))
 
         scheduler = AlarmScheduler.get(this)
         scheduleScreen = ScheduleScreen(this, scheduler) { requestExactAlarms() }
@@ -146,12 +166,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         // so the chips and the weather card sit on one line.
         val panelHeight = resources.displayMetrics.heightPixels
         val tileHeight = (panelHeight * 0.19f).toInt()
-        alarmTile = ambientTile(tileHeight) {
-            push.fadeToClock("alarms"); scheduleScreen.open("alarm")
-        }
-        timerTile = ambientTile(tileHeight) {
-            push.fadeToClock("timers"); scheduleScreen.open("timer")
-        }
+        alarmTile = ambientTile(tileHeight) { openSchedule("alarm") }
+        timerTile = ambientTile(tileHeight) { openSchedule("timer") }
         val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tiles.addView(alarmTile, LinearLayout.LayoutParams(-2, -1))
         tiles.addView(
@@ -160,23 +176,19 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 marginStart = (tileHeight * 0.16f).toInt()
             }
         )
-        root.addView(
+        canvasLayer.addView(
             tiles,
             FrameLayout.LayoutParams(-2, tileHeight, Gravity.BOTTOM or Gravity.END).apply {
                 bottomMargin = (panelHeight * 0.06f).toInt()
                 marginEnd = (resources.displayMetrics.widthPixels * 0.035f).toInt()
             }
         )
-        updateTiles()
 
-        push = PushSurface(this)
-        root.addView(
-            push,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
+        // The ported ambient UI, if this device can host one. Added above the
+        // Canvas layer rather than instead of it, so the fallback is a
+        // visibility flip.
+        web = AmbientWeb.createOrNull(this, webCallbacks)
+        web?.let { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
 
         root.addView(scheduleScreen, FrameLayout.LayoutParams(-1, -1))
         statusBar = StatusOverlay(this)
@@ -189,8 +201,47 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
         )
 
+        if (web == null) {
+            enterCanvasMode("this device has no usable WebView")
+        } else {
+            // The page draws its own conversation chrome; the native band
+            // keeps the one thing it must never share -- the camera pill.
+            canvasLayer.visibility = View.GONE
+            statusBar.showConversation = false
+        }
+        updateTiles()
+
         setContentView(root)
         clock.dimFactor = AmbientClock.dimForHour()
+    }
+
+    /**
+     * Hand the screen back to the Canvas ambient (UI-BRIEF-4) and never ask
+     * the WebView again this boot.
+     *
+     * One-way on purpose: the two reasons this is reached -- no WebView
+     * installed, and a renderer that died -- are both things that retrying
+     * would only rediscover, and a display that flickers between two designs
+     * is worse than one that settles on the plainer of them.
+     */
+    private fun enterCanvasMode(reason: String) {
+        if (push != null) return
+        Log.w(TAG, "ambient falls back to the Canvas clock: $reason")
+
+        web?.let { dead ->
+            web = null
+            // Never destroy a WebView from inside its own client callback.
+            root.post { root.removeView(dead); dead.destroy() }
+        }
+
+        push = PushSurface(this).also {
+            canvasLayer.addView(it, FrameLayout.LayoutParams(-1, -1))
+        }
+        canvasLayer.visibility = View.VISIBLE
+        statusBar.showConversation = true
+        clock.dimFactor = AmbientClock.dimForHour()
+        clock.startTicking()
+        updateTiles()
     }
 
     /**
@@ -220,7 +271,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     override fun onResume() {
         super.onResume()
-        clock.startTicking()
+        // Only in Canvas mode: ticking a GONE clock is an invalidate a second
+        // for a view nobody can see.
+        if (push != null) clock.startTicking()
         scheduler.restore()
         scheduleScreen.render()
         hideSystemBars()
@@ -249,7 +302,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         capture?.stop()
         playback?.stop()
         link?.stop()
-        push.destroy()
+        push?.destroy()
+        web?.destroy()
         clock.stopTicking()
         super.onDestroy()
     }
@@ -295,10 +349,21 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return super.onTouchEvent(event)
+        handleTap()
+        return true
+    }
 
+    /**
+     * The one implementation of tap-to-talk. In Canvas mode it is reached from
+     * [onTouchEvent]; in WebView mode the page's document click handler calls
+     * `EchoNative.tap()` and lands here instead, because a WebView consumes
+     * every touch before the activity sees it. Same rule either way, and the
+     * rule reads the same state either way.
+     */
+    private fun handleTap() {
         if (link?.state != Link.State.CONNECTED) {
             Log.i(TAG, "tap ignored: link is ${link?.state}")
-            return true
+            return
         }
         if (statusBar.state != Protocol.UiState.IDLE) {
             Log.i(TAG, "tap to keep talking")
@@ -307,7 +372,29 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             Log.i(TAG, "tap to talk")
             link?.sendTap()
         }
-        return true
+    }
+
+    /** The alarms/timers entry point, from a native tile or a WebView chip. */
+    private fun openSchedule(kind: String) {
+        push?.fadeToClock(kind)
+        web?.displayClear()
+        scheduleScreen.open(kind)
+    }
+
+    /**
+     * What the ambient page is allowed to ask for. [AmbientWeb.Callbacks] is
+     * the whole surface: three intents and a failure report.
+     */
+    private val webCallbacks = object : AmbientWeb.Callbacks {
+        override fun onTap() = handleTap()
+
+        override fun onStay() {
+            if (link?.state == Link.State.CONNECTED) link?.sendStay()
+        }
+
+        override fun onOpenAlarm() = openSchedule("alarm")
+        override fun onOpenTimer() = openSchedule("timer")
+        override fun onWebViewFailed(reason: String) = enterCanvasMode(reason)
     }
 
     // --- permissions and capture --------------------------------------------
@@ -409,16 +496,20 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 Link.State.CONNECTING -> AmbientClock.LinkIndicator.CONNECTING
                 Link.State.DISCONNECTED -> AmbientClock.LinkIndicator.OFFLINE
             }
+            web?.linkState(state)
             if (state != Link.State.CONNECTED) {
                 // Link loss returns the display to the clock: pushed content is
                 // by definition stale once the thing that pushed it is gone.
-                push.fadeToClock("link lost")
+                push?.fadeToClock("link lost")
+                web?.displayClear()
                 statusBar.state = Protocol.UiState.IDLE
+                web?.uiState(Protocol.UiState.IDLE)
                 statusBar.cameraStreaming = false
                 statusBar.shutterClosed = false
                 // No server, no session to keep talking to -- and no way to
                 // send the stay if the hint were tapped.
                 statusBar.clearQuietWindow()
+                web?.quietWindow(false)
                 capture?.uplinkEnabled = true
                 playback?.flush()
                 // And the camera goes with it. No server means no session.
@@ -441,19 +532,25 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             Protocol.Type.STATE -> runOnUiThread {
                 val next = Protocol.UiState.from(msg.str("state"))
                 statusBar.state = next
+                web?.uiState(next)
                 // The session is over; there is nothing left to keep talking to.
-                if (next == Protocol.UiState.IDLE) statusBar.clearQuietWindow()
+                if (next == Protocol.UiState.IDLE) {
+                    statusBar.clearQuietWindow()
+                    web?.quietWindow(false)
+                }
             }
 
             // The model has finished answering and the server is counting down
             // to closing the session (POST_ANSWER_SILENCE_S). Re-sent whenever
             // the deadline moves, so a tap that extends it retracts the hint.
             Protocol.Type.SESSION_QUIET -> runOnUiThread {
-                if (msg.bool("active", false)) {
+                val active = msg.bool("active", false)
+                if (active) {
                     statusBar.setQuietWindow((msg.dbl("closes_in_s", 0.0) * 1000).toLong())
                 } else {
                     statusBar.clearQuietWindow()
                 }
+                web?.quietWindow(active)
             }
 
             Protocol.Type.MIC -> {
@@ -478,11 +575,17 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                     )
                 } else {
                     Log.i(TAG, "display: ${PushSurface.describe(cmd)}")
-                    runOnUiThread { push.show(cmd) }
+                    runOnUiThread {
+                        val webView = web
+                        if (webView != null) webView.display(cmd) else push?.show(cmd)
+                    }
                 }
             }
 
-            Protocol.Type.DISPLAY_CLEAR -> runOnUiThread { push.fadeToClock("cleared") }
+            Protocol.Type.DISPLAY_CLEAR -> runOnUiThread {
+                push?.fadeToClock("cleared")
+                web?.displayClear()
+            }
 
             // Ambient decoration, and treated as such: an unreadable payload is
             // logged and dropped, never answered with an error and never
@@ -492,7 +595,13 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 if (reading == null) {
                     Log.w(TAG, "unusable weather payload; keeping the last reading")
                 } else {
-                    runOnUiThread { clock.weather = reading }
+                    runOnUiThread {
+                        // Both layers, always: the Canvas ambient has to have
+                        // the last reading in hand if it is ever handed the
+                        // screen mid-session.
+                        clock.weather = reading
+                        web?.weather(reading)
+                    }
                 }
             }
 
@@ -512,8 +621,11 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     private fun updateTiles() {
         val state = JSONObject(scheduler.snapshot())
-        alarmTile.text = "Alarms · ${state.getJSONArray("alarms").length()}"
-        timerTile.text = "Timers · ${state.getJSONArray("timers").length()}"
+        val alarms = state.getJSONArray("alarms").length()
+        val timers = state.getJSONArray("timers").length()
+        alarmTile.text = "Alarms · $alarms"
+        timerTile.text = "Timers · $timers"
+        web?.schedule(alarms, timers)
     }
 
     private fun requestExactAlarms() {

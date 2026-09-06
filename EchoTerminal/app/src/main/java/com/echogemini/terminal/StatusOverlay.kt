@@ -75,6 +75,22 @@ class StatusOverlay(context: Context) : View(context) {
             invalidate()
         }
 
+    /**
+     * Whether this band draws the conversation state pill and the stay hint.
+     *
+     * False when the WebView ambient is running (UI-BRIEF-9): the page draws
+     * its own conversation chrome, and two "LISTENING" labels on one screen is
+     * one too many. The camera indicator is NOT covered by this flag and never
+     * will be -- it is the reason this view sits above every surface that can
+     * render server content, and it has to survive whatever is below it.
+     */
+    var showConversation: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     private val pulse = object : Runnable {
         override fun run() {
             pulsePhase = (pulsePhase + 0.08f) % 1f
@@ -153,8 +169,10 @@ class StatusOverlay(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
 
-        drawState(canvas, h)
-        if (hintAlpha > 0f) drawStayHint(canvas, h)
+        if (showConversation) {
+            drawState(canvas, h)
+            if (hintAlpha > 0f) drawStayHint(canvas, h)
+        }
 
         when {
             cameraStreaming -> drawCameraPill(canvas, w, h)
