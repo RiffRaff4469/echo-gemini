@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Echo Show 5 — UI Concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#05070a;
+    --bezel:#111418;
+    --fabric:#1c1f24;
+    --glass: rgba(255,255,255,0.05);
+    --glass-strong: rgba(255,255,255,0.09);
+    --line: rgba(255,255,255,0.08);
+    --ink:#f2f4f7;
+    --ink-dim: rgba(242,244,247,0.55);
+    --ink-faint: rgba(242,244,247,0.32);
+    --blue:#4f8cff;
+    --blue-soft: rgba(79,140,255,0.35);
+    --amber:#ffb454;
+    --green:#35d399;
+    --red:#ff5c5c;
+    --purple:#b06bff;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background: radial-gradient(ellipse at 50% 20%, #14171c 0%, #05070a 65%);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Inter',sans-serif;
+    color:var(--ink);
+  }
+  .stage{ display:flex; flex-direction:column; align-items:center; gap:18px; padding:40px 20px; }
+
+  /* ---------- device ---------- */
+  .device{
+    position:relative;
+    width:min(90vw, 900px);
+    aspect-ratio: 960/620;
+    background: linear-gradient(180deg, var(--bezel) 0%, var(--bezel) 74%, var(--fabric) 74%, var(--fabric) 100%);
+    border-radius:26px;
+    padding:16px 16px 0 16px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.03) inset;
+  }
+  .cam{
+    position:absolute; top:7px; left:50%; transform:translateX(-50%);
+    width:7px; height:7px; border-radius:50%;
+    background:#000; box-shadow: 0 0 0 2px rgba(255,255,255,0.06);
+  }
+  .fabric-tex{
+    position:absolute; left:0; right:0; bottom:0; height:26%;
+    background-image: repeating-linear-gradient(115deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 2px, transparent 2px, transparent 4px);
+    border-radius:0 0 26px 26px;
+  }
+
+  .screen-wrap{ position:relative; width:100%; aspect-ratio: 960/480; border-radius:6px; overflow:hidden; background:var(--void); }
+  .ring{
+    position:absolute; inset:0; border-radius:6px; pointer-events:none;
+    box-shadow: inset 0 0 0 0px var(--blue-soft);
+    transition: box-shadow .35s ease; z-index:5;
+  }
+  .ring.active{
+    box-shadow: inset 0 0 0 3px rgba(79,140,255,0.9), inset 0 0 22px 4px rgba(79,140,255,0.55);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse{
+    0%,100%{ box-shadow: inset 0 0 0 3px rgba(79,140,255,0.75), inset 0 0 18px 3px rgba(79,140,255,0.4); }
+    50%{ box-shadow: inset 0 0 0 3px rgba(79,140,255,1), inset 0 0 30px 6px rgba(79,140,255,0.7); }
+  }
+
+  .screen{ position:absolute; inset:0; display:none; flex-direction:column; padding:20px 26px 14px 26px; }
+  .screen.visible{ display:flex; }
+
+  /* ---------- top status strip: dot carries ALL the meaning, no text ---------- */
+  .status-row{ display:flex; align-items:center; justify-content:space-between; margin-bottom:2px; }
+  .dot{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--green);
+    box-shadow: 0 0 7px rgba(53,211,153,0.9);
+  }
+  .dot.off{ background:var(--red); box-shadow:0 0 7px rgba(255,92,92,0.9); }
+  .page-label{ font-size:11px; color:var(--ink-faint); letter-spacing:.04em; }
+
+  /* ---------- HOME / CLOCK FACES ---------- */
+  .home{ flex:1; display:flex; flex-direction:column; justify-content:space-between; }
+  .face-switch{ display:flex; gap:6px; align-self:flex-start; }
+  .fbtn{
+    font-size:10px; padding:4px 10px; border-radius:20px;
+    background:var(--glass); border:1px solid var(--line); color:var(--ink-dim);
+    cursor:pointer;
+  }
+  .fbtn.on{ background:var(--glass-strong); color:var(--ink); border-color:rgba(255,255,255,0.2); }
+
+  .clock-stage{ flex:1; display:flex; align-items:center; }
+  .face{ display:none; width:100%; }
+  .face.active{ display:flex; flex-direction:column; }
+
+  /* Digital face */
+  .face.digital .time{
+    font-family:'Space Grotesk', sans-serif; font-weight:600;
+    font-size:min(15vw, 122px); line-height:.95; letter-spacing:-.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .face.digital .time .colon{ opacity:.5; }
+  .face.digital .date{ font-size:15px; color:var(--ink-dim); margin-top:4px; font-weight:500; }
+
+  /* Bold gradient face (StandBy-style oversized color) */
+  .face.bold .time{
+    font-family:'Space Grotesk', sans-serif; font-weight:700;
+    font-size:min(18vw, 148px); line-height:.9; letter-spacing:-.02em;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(120deg, #6ba8ff 0%, var(--purple) 55%, #ff7ab0 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .face.bold .date{ font-size:15px; color:var(--ink-dim); margin-top:2px; font-weight:600; }
+
+  /* Retro / nixie face */
+  .face.retro .time{
+    font-family:'JetBrains Mono', monospace; font-weight:500;
+    font-size:min(13vw, 104px); line-height:1; letter-spacing:.02em;
+    color:#ffb454; text-shadow: 0 0 14px rgba(255,180,84,0.65), 0 0 2px rgba(255,180,84,0.9);
+  }
+  .face.retro .date{ font-size:13px; color:rgba(255,180,84,0.55); margin-top:8px; font-family:'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.1em; }
+
+  /* Analog face */
+  .face.analog{ align-items:center; justify-content:center; flex-direction:row; gap:26px; }
+  .analog-date{ font-size:14px; color:var(--ink-dim); font-weight:500; }
+
+  .home-footer{ display:flex; align-items:flex-end; justify-content:space-between; padding-top:10px; border-top:1px solid var(--line); }
+  .weather-mini{ display:flex; align-items:center; gap:10px; padding-top:12px; }
+  .wico{ width:28px; height:28px; }
+  .wtemp{ font-size:20px; font-weight:600; font-family:'Space Grotesk',sans-serif; }
+  .wcond{ font-size:11px; color:var(--ink-dim); }
+  .hint{ font-size:11px; color:var(--ink-faint); padding-top:12px; }
+
+  /* ---------- WEATHER PAGE ---------- */
+  .weather-page{ flex:1; display:flex; flex-direction:column; }
+  .wx-hero{ flex:1; display:flex; align-items:center; justify-content:space-between; }
+  .wx-temp-big{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:min(11vw, 92px); line-height:1; }
+  .wx-sub{ color:var(--ink-dim); font-size:13px; margin-top:6px; }
+  .wx-hilo{ display:flex; gap:14px; margin-top:10px; font-size:12px; color:var(--ink-dim); }
+  .wx-hilo b{ color:var(--ink); font-weight:600; }
+  .sun{ width:88px; height:88px; border-radius:50%; background: radial-gradient(circle at 35% 30%, #ffd88a, var(--amber) 60%, #d98a2a 100%); box-shadow: 0 0 40px rgba(255,180,84,0.45); }
+  .hourly{ display:flex; justify-content:space-between; border-top:1px solid var(--line); padding-top:10px; }
+  .hour-item{ display:flex; flex-direction:column; align-items:center; gap:5px; font-size:10px; color:var(--ink-dim); }
+  .hour-item b{ color:var(--ink); font-size:12px; font-weight:600; }
+  .hdot{ width:14px; height:14px; border-radius:50%; background:linear-gradient(180deg,#ffd88a,var(--amber)); }
+
+  /* ---------- SCORES PAGE ---------- */
+  .scores-page{ flex:1; display:flex; flex-direction:column; gap:8px; justify-content:center; }
+  .score-card{ display:flex; align-items:center; justify-content:space-between; background:var(--glass); border:1px solid var(--line); border-radius:12px; padding:8px 16px; }
+  .team{ display:flex; align-items:center; gap:9px; width:38%; }
+  .badge{ width:24px; height:24px; border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; font-family:'Space Grotesk',sans-serif; }
+  .team-name{ font-size:12px; font-weight:600; }
+  .team-name span{ display:block; font-size:9px; color:var(--ink-faint); font-weight:400; }
+  .score-num{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:20px; width:32px; text-align:center; }
+  .game-meta{ width:22%; text-align:right; font-size:10px; color:var(--ink-dim); }
+  .live{ color:var(--red); font-weight:600; }
+  .final{ color:var(--ink-faint); }
+
+  /* ---------- FLIGHTS PAGE ---------- */
+  .flights-page{ flex:1; display:flex; gap:18px; align-items:center; }
+  .radar{ position:relative; width:150px; height:150px; flex-shrink:0; }
+  .radar svg{ width:100%; height:100%; }
+  .plane-tag{ position:absolute; font-size:9px; color:var(--blue); font-weight:600; white-space:nowrap; transform:translate(-50%,-140%); }
+  .flight-list{ flex:1; display:flex; flex-direction:column; gap:8px; }
+  .flight-row{ display:flex; align-items:center; justify-content:space-between; background:var(--glass); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:11px; }
+  .flight-code{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:13px; }
+  .flight-route{ color:var(--ink-dim); font-size:10px; }
+  .flight-stat{ text-align:right; color:var(--ink-dim); font-size:10px; }
+  .flight-stat b{ color:var(--ink); font-family:'Space Grotesk',sans-serif; }
+
+  /* ---------- NEWS PAGE ---------- */
+  .news-page{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:14px; }
+  .news-tag{ display:inline-flex; align-items:center; gap:6px; background:var(--red); color:#fff; font-size:10px; font-weight:700; letter-spacing:.06em; padding:3px 10px; border-radius:4px; width:fit-content; }
+  .news-headline{ font-size:26px; font-weight:600; line-height:1.2; max-width:88%; }
+  .news-meta{ font-size:11px; color:var(--ink-faint); }
+  .ticker{ overflow:hidden; white-space:nowrap; border-top:1px solid var(--line); padding-top:10px; }
+  .ticker-track{ display:inline-block; padding-left:100%; animation: scroll-left 22s linear infinite; font-size:12px; color:var(--ink-dim); }
+  .ticker-track span{ margin-right:40px; }
+  @keyframes scroll-left{ from{ transform:translateX(0); } to{ transform:translateX(-100%); } }
+
+  /* ---------- STOCKS PAGE ---------- */
+  .stocks-page{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:8px; }
+  .stock-row{ display:flex; align-items:center; justify-content:space-between; background:var(--glass); border:1px solid var(--line); border-radius:10px; padding:9px 14px; }
+  .stock-id{ display:flex; flex-direction:column; }
+  .stock-sym{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:14px; }
+  .stock-name{ font-size:10px; color:var(--ink-faint); }
+  .stock-spark{ width:70px; height:26px; }
+  .stock-price{ text-align:right; }
+  .stock-val{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14px; }
+  .stock-chg{ font-size:11px; font-weight:600; }
+  .up{ color:var(--green); }
+  .down{ color:var(--red); }
+
+  /* ---------- pagination ---------- */
+  .pager{ height:44px; display:flex; align-items:center; justify-content:center; gap:7px; position:relative; z-index:2; }
+  .pdot{ width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,0.22); cursor:pointer; transition: background .2s, transform .2s; }
+  .pdot.on{ background:var(--blue); transform:scale(1.3); }
+
+  /* ---------- controls (outside the mockup) ---------- */
+  .controls{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; max-width:640px; }
+  .ctl-group{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .ctl-btn{ font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600; color:var(--ink); background:var(--glass-strong); border:1px solid var(--line); border-radius:20px; padding:7px 14px; cursor:pointer; }
+  .ctl-btn:hover{ background:rgba(255,255,255,0.14); }
+  .ctl-btn.on{ background:var(--blue); border-color:var(--blue); }
+  .divider{ width:1px; align-self:stretch; background:var(--line); margin:0 2px; }
+  .caption{ font-size:12px; color:rgba(242,244,247,0.4); text-align:center; max-width:560px; }
+
+  /* ---------- WORLD CLOCK PAGE ---------- */
+  .world-page{ flex:1; display:flex; flex-direction:column; gap:8px; }
+  .map-box{ position:relative; width:100%; aspect-ratio:2/1; border-radius:8px; overflow:hidden; background:#0a1522; }
+  .map-box svg{ width:100%; height:100%; display:block; }
+  .city-dot{
+    position:absolute; width:7px; height:7px; border-radius:50%;
+    background:var(--blue); box-shadow:0 0 8px rgba(79,140,255,0.95);
+    transform:translate(-50%,-50%);
+  }
+  .city-tag{
+    position:absolute; font-size:9px; color:var(--ink); font-weight:600;
+    transform:translate(-50%, -170%); white-space:nowrap; text-shadow:0 1px 3px rgba(0,0,0,0.8);
+  }
+  .city-list{ display:flex; justify-content:space-between; gap:8px; }
+  .city-card{ flex:1; background:var(--glass); border:1px solid var(--line); border-radius:10px; padding:7px 10px; text-align:center; }
+  .city-card .cname{ font-size:10px; color:var(--ink-dim); }
+  .city-card .ctime{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; margin-top:2px; }
+  .city-card .cbadge{ font-size:9px; color:var(--ink-faint); margin-top:1px; }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="device">
+    <div class="cam"></div>
+    <div class="screen-wrap">
+      <div class="ring" id="ring"></div>
+
+      <!-- HOME -->
+      <div class="screen visible" data-page="0">
+        <div class="status-row">
+          <div class="dot conn-dot" title="Connected"></div>
+          <span class="page-label">Kitchen Display</span>
+        </div>
+        <div class="home">
+          <div class="face-switch">
+            <div class="fbtn on" data-face="digital">Digital</div>
+            <div class="fbtn" data-face="analog">Analog</div>
+            <div class="fbtn" data-face="bold">Bold</div>
+            <div class="fbtn" data-face="retro">Retro</div>
+          </div>
+
+          <div class="clock-stage">
+            <div class="face digital active">
+              <div class="time" id="time-digital">7<span class="colon">:</span>42<span style="font-size:0.4em; margin-left:10px; color:var(--ink-dim); font-weight:500;">PM</span></div>
+              <div class="date" id="date-digital">Sunday, September 6</div>
+            </div>
+
+            <div class="face bold">
+              <div class="time" id="time-bold">7:42</div>
+              <div class="date" id="date-bold">Sun Sep 6</div>
+            </div>
+
+            <div class="face retro">
+              <div class="time" id="time-retro">19:42:07</div>
+              <div class="date" id="date-retro">Sun · Sep 06</div>
+            </div>
+
+            <div class="face analog">
+              <div class="radar-clock">
+                <svg width="130" height="130" viewBox="0 0 130 130">
+                  <circle cx="65" cy="65" r="62" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5"/>
+                  <g stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round">
+                    <line x1="65" y1="8" x2="65" y2="16"/>
+                    <line x1="65" y1="114" x2="65" y2="122"/>
+                    <line x1="8" y1="65" x2="16" y2="65"/>
+                    <line x1="114" y1="65" x2="122" y2="65"/>
+                  </g>
+                  <line id="hourhand" x1="65" y1="65" x2="65" y2="38" stroke="#f2f4f7" stroke-width="4" stroke-linecap="round"/>
+                  <line id="minhand" x1="65" y1="65" x2="65" y2="22" stroke="#f2f4f7" stroke-width="3" stroke-linecap="round"/>
+                  <line id="sechand" x1="65" y1="65" x2="65" y2="18" stroke="var(--blue)" stroke-width="1.5" stroke-linecap="round"/>
+                  <circle cx="65" cy="65" r="3.5" fill="var(--blue)"/>
+                </svg>
+              </div>
+              <div class="analog-date" id="date-analog">Sunday, September 6</div>
+            </div>
+          </div>
+
+          <div class="home-footer">
+            <div class="weather-mini">
+              <svg class="wico" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" fill="#ffb454"/><g stroke="#ffb454" stroke-width="1.6" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/></g></svg>
+              <div><div class="wtemp">72°</div><div class="wcond">Clear · H:78° L:61°</div></div>
+            </div>
+            <div class="hint">Swipe for weather, scores, flights, news, stocks →</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WEATHER -->
+      <div class="screen" data-page="1">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">Weather</span></div>
+        <div class="weather-page">
+          <div class="wx-hero">
+            <div>
+              <div class="wx-temp-big">72°</div>
+              <div class="wx-sub">Clear · Feels like 74°</div>
+              <div class="wx-hilo"><span>H <b>78°</b></span><span>L <b>61°</b></span><span>Wind <b>6 mph</b></span></div>
+            </div>
+            <div class="sun"></div>
+          </div>
+          <div class="hourly">
+            <div class="hour-item"><span>Now</span><div class="hdot"></div><b>72°</b></div>
+            <div class="hour-item"><span>3PM</span><div class="hdot"></div><b>74°</b></div>
+            <div class="hour-item"><span>4PM</span><div class="hdot"></div><b>75°</b></div>
+            <div class="hour-item"><span>5PM</span><div class="hdot" style="background:linear-gradient(180deg,#9db3d8,#5c7bb0);"></div><b>70°</b></div>
+            <div class="hour-item"><span>6PM</span><div class="hdot" style="background:linear-gradient(180deg,#7c8fb5,#425583);"></div><b>66°</b></div>
+            <div class="hour-item"><span>7PM</span><div class="hdot" style="background:linear-gradient(180deg,#5b6a8c,#2e3a5c);"></div><b>63°</b></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SCORES -->
+      <div class="screen" data-page="2">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">Scores</span></div>
+        <div class="scores-page">
+          <div class="score-card">
+            <div class="team"><div class="badge" style="background:#1d4ed8;">BUF</div><div class="team-name">Bills<span>Home</span></div></div>
+            <div class="score-num">24</div>
+            <div class="game-meta"><span class="live">● LIVE</span><br>Q3 4:12</div>
+            <div class="score-num">20</div>
+            <div class="team" style="justify-content:flex-end; text-align:right;"><div class="team-name">Jets<span>Away</span></div><div class="badge" style="background:#15803d;">NYJ</div></div>
+          </div>
+          <div class="score-card">
+            <div class="team"><div class="badge" style="background:#7c2d12;">CUSE</div><div class="team-name">Orange<span>Home</span></div></div>
+            <div class="score-num">14</div>
+            <div class="game-meta"><span class="final">FINAL</span></div>
+            <div class="score-num">10</div>
+            <div class="team" style="justify-content:flex-end; text-align:right;"><div class="team-name">UConn<span>Away</span></div><div class="badge" style="background:#334155;">UC</div></div>
+          </div>
+          <div class="score-card">
+            <div class="team"><div class="badge" style="background:#9333ea;">LAL</div><div class="team-name">Lakers<span>Home</span></div></div>
+            <div class="score-num">88</div>
+            <div class="game-meta"><span class="live">● LIVE</span><br>Q4 2:47</div>
+            <div class="score-num">91</div>
+            <div class="team" style="justify-content:flex-end; text-align:right;"><div class="team-name">Celtics<span>Away</span></div><div class="badge" style="background:#15803d;">BOS</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FLIGHTS -->
+      <div class="screen" data-page="3">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">Overhead</span></div>
+        <div class="flights-page">
+          <div class="radar">
+            <svg viewBox="0 0 150 150">
+              <circle cx="75" cy="75" r="70" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+              <circle cx="75" cy="75" r="46" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+              <circle cx="75" cy="75" r="22" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+              <line x1="75" y1="5" x2="75" y2="145" stroke="rgba(79,140,255,0.1)" stroke-width="1"/>
+              <line x1="5" y1="75" x2="145" y2="75" stroke="rgba(79,140,255,0.1)" stroke-width="1"/>
+              <circle cx="75" cy="75" r="3" fill="var(--ink-dim)"/>
+              <g transform="translate(100,40) rotate(40)"><path d="M0,-6 L4,4 L0,2 L-4,4 Z" fill="var(--blue)"/></g>
+              <g transform="translate(50,100) rotate(160)"><path d="M0,-6 L4,4 L0,2 L-4,4 Z" fill="var(--blue)"/></g>
+              <g transform="translate(110,105) rotate(-100)"><path d="M0,-6 L4,4 L0,2 L-4,4 Z" fill="var(--blue)"/></g>
+            </svg>
+            <div class="plane-tag" style="left:67%; top:27%;">DL1490</div>
+            <div class="plane-tag" style="left:33%; top:67%;">JBU212</div>
+            <div class="plane-tag" style="left:73%; top:70%;">AAL58</div>
+          </div>
+          <div class="flight-list">
+            <div class="flight-row">
+              <div><div class="flight-code">DL1490</div><div class="flight-route">SYR → ATL</div></div>
+              <div class="flight-stat">FL340 · <b>412kt</b><br>2.1 mi overhead</div>
+            </div>
+            <div class="flight-row">
+              <div><div class="flight-code">JBU212</div><div class="flight-route">BOS → SYR</div></div>
+              <div class="flight-stat">FL085 · <b>260kt</b><br>descending</div>
+            </div>
+            <div class="flight-row">
+              <div><div class="flight-code">AAL58</div><div class="flight-route">ORD → JFK</div></div>
+              <div class="flight-stat">FL360 · <b>448kt</b><br>4.6 mi overhead</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NEWS -->
+      <div class="screen" data-page="4">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">News</span></div>
+        <div class="news-page">
+          <div>
+            <div class="news-tag">BREAKING</div>
+            <div class="news-headline" style="margin-top:8px;">Fed signals possible rate move at next meeting</div>
+            <div class="news-meta" style="margin-top:6px;">Reuters · 4 min ago</div>
+          </div>
+          <div class="ticker">
+            <div class="ticker-track">
+              <span>Syracuse falls to 2-1 after road loss</span>
+              <span>Local Micron construction hits new milestone</span>
+              <span>NASA sets new launch window for next mission</span>
+              <span>Regional airport adds new nonstop route</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STOCKS -->
+      <div class="screen" data-page="5">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">Markets</span></div>
+        <div class="stocks-page">
+          <div class="stock-row">
+            <div class="stock-id"><div class="stock-sym">AAPL</div><div class="stock-name">Apple Inc.</div></div>
+            <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,18 12,15 24,17 36,9 48,11 60,4 70,6" fill="none" stroke="#35d399" stroke-width="2"/></svg>
+            <div class="stock-price"><div class="stock-val">$238.14</div><div class="stock-chg up">▲ 1.2%</div></div>
+          </div>
+          <div class="stock-row">
+            <div class="stock-id"><div class="stock-sym">TSLA</div><div class="stock-name">Tesla Inc.</div></div>
+            <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,6 12,10 24,8 36,16 48,14 60,20 70,22" fill="none" stroke="#ff5c5c" stroke-width="2"/></svg>
+            <div class="stock-price"><div class="stock-val">$241.87</div><div class="stock-chg down">▼ 2.4%</div></div>
+          </div>
+          <div class="stock-row">
+            <div class="stock-id"><div class="stock-sym">SPY</div><div class="stock-name">S&amp;P 500 ETF</div></div>
+            <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,16 12,14 24,15 36,11 48,12 60,7 70,8" fill="none" stroke="#35d399" stroke-width="2"/></svg>
+            <div class="stock-price"><div class="stock-val">$584.32</div><div class="stock-chg up">▲ 0.6%</div></div>
+          </div>
+          <div class="stock-row">
+            <div class="stock-id"><div class="stock-sym">BTC</div><div class="stock-name">Bitcoin</div></div>
+            <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,10 12,8 24,13 36,9 48,15 60,12 70,17" fill="none" stroke="#ff5c5c" stroke-width="2"/></svg>
+            <div class="stock-price"><div class="stock-val">$61,204</div><div class="stock-chg down">▼ 0.9%</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WORLD CLOCK -->
+      <div class="screen" data-page="6">
+        <div class="status-row"><div class="dot conn-dot"></div><span class="page-label">World Clock</span></div>
+        <div class="world-page">
+          <div class="map-box" id="map-box">
+            <svg id="world-svg" viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <radialGradient id="nightGrad" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#05070a" stop-opacity="0.88"/>
+                  <stop offset="70%" stop-color="#05070a" stop-opacity="0.55"/>
+                  <stop offset="100%" stop-color="#05070a" stop-opacity="0"/>
+                </radialGradient>
+              </defs>
+              <rect x="0" y="0" width="960" height="480" fill="#0a1522"/>
+              <g fill="#233a52" stroke="#2e4a68" stroke-width="1">
+                <!-- North America -->
+                <path d="M120,110 C160,90 210,85 250,95 C280,105 285,130 270,150 C275,175 255,195 235,215 C220,235 200,240 185,225 C165,220 155,200 145,180 C120,170 100,150 105,130 Z"/>
+                <!-- South America -->
+                <path d="M245,255 C265,250 285,260 290,290 C300,320 295,360 275,390 C260,410 245,400 240,375 C225,340 220,300 230,275 Z"/>
+                <!-- Europe -->
+                <path d="M470,105 C500,95 530,100 545,115 C555,130 545,145 525,150 C505,155 480,150 465,135 Z"/>
+                <!-- Africa -->
+                <path d="M470,160 C505,155 540,165 550,195 C560,230 550,270 530,305 C515,330 495,325 485,300 C465,260 460,210 470,160 Z"/>
+                <!-- Asia -->
+                <path d="M555,90 C610,75 690,80 750,100 C800,115 830,140 815,165 C800,185 760,180 720,190 C680,200 650,220 610,210 C580,200 560,175 555,150 Z"/>
+                <!-- SE Asia / India -->
+                <path d="M600,195 C625,190 650,200 655,220 C660,240 640,255 620,250 C605,245 595,215 600,195 Z"/>
+                <!-- Australia -->
+                <path d="M760,300 C795,290 830,300 840,320 C845,340 820,355 790,352 C765,350 750,320 760,300 Z"/>
+              </g>
+              <g stroke="rgba(255,255,255,0.06)" stroke-width="1">
+                <line x1="0" y1="120" x2="960" y2="120"/>
+                <line x1="0" y1="240" x2="960" y2="240"/>
+                <line x1="0" y1="360" x2="960" y2="360"/>
+                <line x1="240" y1="0" x2="240" y2="480"/>
+                <line x1="480" y1="0" x2="480" y2="480"/>
+                <line x1="720" y1="0" x2="720" y2="480"/>
+              </g>
+              <path id="terminator" fill="none" stroke="rgba(255,209,128,0.55)" stroke-width="1.5"/>
+              <ellipse id="night-shadow" fill="url(#nightGrad)" />
+            </svg>
+          </div>
+          <div class="city-list" id="city-list"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="pager">
+      <div class="pdot on" data-goto="0"></div>
+      <div class="pdot" data-goto="1"></div>
+      <div class="pdot" data-goto="2"></div>
+      <div class="pdot" data-goto="3"></div>
+      <div class="pdot" data-goto="4"></div>
+      <div class="pdot" data-goto="5"></div>
+      <div class="pdot" data-goto="6"></div>
+    </div>
+    <div class="fabric-tex"></div>
+  </div>
+
+  <div class="controls">
+    <div class="ctl-group">
+      <button class="ctl-btn" id="ring-btn">🎙️ Simulate listening</button>
+      <button class="ctl-btn" id="conn-btn">🔌 Toggle connection</button>
+    </div>
+    <div class="divider"></div>
+    <div class="ctl-group">
+      <button class="ctl-btn" data-goto="0">Home</button>
+      <button class="ctl-btn" data-goto="1">Weather</button>
+      <button class="ctl-btn" data-goto="2">Scores</button>
+      <button class="ctl-btn" data-goto="3">Flights</button>
+      <button class="ctl-btn" data-goto="4">News</button>
+      <button class="ctl-btn" data-goto="5">Stocks</button>
+      <button class="ctl-btn" data-goto="6">World</button>
+    </div>
+  </div>
+  <div class="caption">Concept UI for Echo Show 5 (1st gen, 960×480). The status dot is color-only — green means connected, red means offline, nothing else changes. Try the four clock faces on the Home page, styled after iPhone StandBy's Digital / Analog / Bold / Retro looks.</div>
+</div>
+
+<script>
+  const screens = document.querySelectorAll('.screen');
+  const pdots = document.querySelectorAll('.pdot');
+  function goTo(i){
+    screens.forEach(s => s.classList.toggle('visible', s.dataset.page === String(i)));
+    pdots.forEach(d => d.classList.toggle('on', d.dataset.goto === String(i)));
+  }
+  document.querySelectorAll('[data-goto]').forEach(el=>{
+    el.addEventListener('click', ()=> goTo(el.dataset.goto));
+  });
+
+  // face switcher
+  const faces = document.querySelectorAll('.face');
+  const fbtns = document.querySelectorAll('.fbtn');
+  fbtns.forEach(b=>{
+    b.addEventListener('click', ()=>{
+      faces.forEach(f => f.classList.toggle('active', f.classList.contains(b.dataset.face)));
+      fbtns.forEach(x => x.classList.toggle('on', x === b));
+    });
+  });
+
+  const ring = document.getElementById('ring');
+  const ringBtn = document.getElementById('ring-btn');
+  let listening = false;
+  ringBtn.addEventListener('click', ()=>{
+    listening = !listening;
+    ring.classList.toggle('active', listening);
+    ringBtn.classList.toggle('on', listening);
+    ringBtn.textContent = listening ? '🎙️ Listening…' : '🎙️ Simulate listening';
+  });
+
+  const connBtn = document.getElementById('conn-btn');
+  let connected = true;
+  connBtn.addEventListener('click', ()=>{
+    connected = !connected;
+    document.querySelectorAll('.conn-dot').forEach(d=>{
+      d.classList.toggle('off', !connected);
+      d.title = connected ? 'Connected' : 'Offline';
+    });
+  });
+
+  function pad(n){ return n < 10 ? '0'+n : n; }
+
+  function tick(){
+    const now = new Date();
+    let h24 = now.getHours();
+    const m = now.getMinutes();
+    const s = now.getSeconds();
+    let h12 = h24 % 12; if(h12 === 0) h12 = 12;
+    const ampm = h24 >= 12 ? 'PM' : 'AM';
+    const mm = pad(m);
+    const dateLong = now.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
+    const dateShort = now.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+
+    document.getElementById('time-digital').innerHTML =
+      h12 + '<span class="colon">:</span>' + mm + '<span style="font-size:0.4em; margin-left:10px; color:var(--ink-dim); font-weight:500;">' + ampm + '</span>';
+    document.getElementById('date-digital').textContent = dateLong;
+
+    document.getElementById('time-bold').textContent = h12 + ':' + mm;
+    document.getElementById('date-bold').textContent = dateShort;
+
+    document.getElementById('time-retro').textContent = pad(h24) + ':' + mm + ':' + pad(s);
+    document.getElementById('date-retro').textContent = dateShort.replace(',', ' ·');
+
+    document.getElementById('date-analog').textContent = dateLong;
+
+    const hourDeg = (h24 % 12) * 30 + m * 0.5;
+    const minDeg = m * 6 + s * 0.1;
+    const secDeg = s * 6;
+    setHand('hourhand', hourDeg, 27);
+    setHand('minhand', minDeg, 43);
+    setHand('sechand', secDeg, 47);
+  }
+  function setHand(id, deg, len){
+    const el = document.getElementById(id);
+    const rad = (deg - 90) * Math.PI / 180;
+    const x2 = 65 + len * Math.cos(rad);
+    const y2 = 65 + len * Math.sin(rad);
+    el.setAttribute('x2', x2.toFixed(1));
+    el.setAttribute('y2', y2.toFixed(1));
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  // ---------- World Clock: terminator + saved city dots ----------
+  const cities = [
+    { name:'Syracuse', tz:'America/New_York', lat:43.05, lon:-76.15 },
+    { name:'Singapore', tz:'Asia/Singapore', lat:1.35, lon:103.82 },
+    { name:'Madrid', tz:'Europe/Madrid', lat:40.42, lon:-3.70 },
+    { name:'Rome', tz:'Europe/Rome', lat:41.90, lon:12.50 }
+  ];
+  const mapBox = document.getElementById('map-box');
+  const cityListEl = document.getElementById('city-list');
+
+  function lonLatToXY(lon, lat){
+    return { x: (lon + 180) / 360 * 960, y: (90 - lat) / 180 * 480 };
+  }
+
+  function renderCityDots(){
+    document.querySelectorAll('.city-dot, .city-tag').forEach(e => e.remove());
+    cities.forEach(c => {
+      const { x, y } = lonLatToXY(c.lon, c.lat);
+      const dot = document.createElement('div');
+      dot.className = 'city-dot';
+      dot.style.left = (x / 960 * 100) + '%';
+      dot.style.top = (y / 480 * 100) + '%';
+      mapBox.appendChild(dot);
+      const tag = document.createElement('div');
+      tag.className = 'city-tag';
+      tag.textContent = c.name;
+      tag.style.left = (x / 960 * 100) + '%';
+      tag.style.top = (y / 480 * 100) + '%';
+      mapBox.appendChild(tag);
+    });
+  }
+  renderCityDots();
+
+  function renderCityList(){
+    const now = new Date();
+    cityListEl.innerHTML = '';
+    cities.forEach(c => {
+      const timeStr = new Intl.DateTimeFormat('en-US', { hour:'numeric', minute:'2-digit', timeZone:c.tz }).format(now);
+      const hereDay = now.toLocaleDateString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      const thereDay = now.toLocaleDateString('en-US', { timeZone: c.tz });
+      let badge = 'Today';
+      if(thereDay !== hereDay){
+        badge = new Date(thereDay) > new Date(hereDay) ? 'Tomorrow' : 'Yesterday';
+      }
+      const card = document.createElement('div');
+      card.className = 'city-card';
+      card.innerHTML = `<div class="cname">${c.name}</div><div class="ctime">${timeStr}</div><div class="cbadge">${badge}</div>`;
+      cityListEl.appendChild(card);
+    });
+  }
+  renderCityList();
+
+  function updateTerminator(){
+    const now = new Date();
+    const start = Date.UTC(now.getUTCFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now - start) / 86400000);
+    const utcHours = now.getUTCHours() + now.getUTCMinutes()/60 + now.getUTCSeconds()/3600;
+
+    const decDeg = 23.44 * Math.sin((2 * Math.PI / 365) * (284 + dayOfYear));
+    const decRad = decDeg * Math.PI / 180;
+    let subsolarLon = 180 - utcHours * 15;
+    subsolarLon = ((subsolarLon + 180) % 360 + 360) % 360 - 180;
+
+    let pts = [];
+    for(let lon = -180; lon <= 180; lon += 4){
+      let H = lon - subsolarLon;
+      H = ((H + 180) % 360 + 360) % 360 - 180;
+      const Hrad = H * Math.PI / 180;
+      const tanDec = Math.tan(decRad);
+      let latRad;
+      if(Math.abs(tanDec) < 0.0001){
+        latRad = (Math.cos(Hrad) >= 0) ? Math.PI/2 * 0.999 : -Math.PI/2 * 0.999;
+      } else {
+        latRad = Math.atan(-Math.cos(Hrad) / tanDec);
+      }
+      const latDeg = Math.max(-89, Math.min(89, latRad * 180 / Math.PI));
+      const { x, y } = lonLatToXY(lon, latDeg);
+      pts.push(x.toFixed(1) + ',' + y.toFixed(1));
+    }
+    document.getElementById('terminator').setAttribute('d', 'M' + pts.join(' L'));
+
+    // antisolar point (center of the night hemisphere) for the soft shadow
+    let antiLon = subsolarLon + 180;
+    antiLon = ((antiLon + 180) % 360 + 360) % 360 - 180;
+    const antiLat = -decDeg;
+    const anti = lonLatToXY(antiLon, antiLat);
+    const shadow = document.getElementById('night-shadow');
+    shadow.setAttribute('cx', anti.x);
+    shadow.setAttribute('cy', anti.y);
+    shadow.setAttribute('rx', 340);
+    shadow.setAttribute('ry', 260);
+  }
+  updateTerminator();
+  setInterval(()=>{ updateTerminator(); renderCityList(); }, 30000);
+</script>
+</body>
+</html>
