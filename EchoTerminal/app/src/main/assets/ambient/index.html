@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!--
+  width=960 pins the layout viewport to the panel's real pixel width, so every
+  length in styles.css is a device pixel on a 960x480 Echo Show 5 and the
+  mockup's numbers port across unchanged. user-scalable=no also removes the
+  300ms tap delay, which matters because a screen tap is tap-to-talk.
+-->
+<meta name="viewport" content="width=960, user-scalable=no">
+<title>Echo ambient</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- The listening ring frames the whole panel, the way the Alexa light ring
+     frames the base. Pure CSS animation, no JS loop. -->
+<div id="ring"></div>
+
+<div id="topbar">
+  <div id="conn-dot" class="dot connecting"></div>
+  <span id="page-label">Home</span>
+</div>
+
+<!-- ---------------------------------------------------------------- HOME -->
+<section class="page visible" data-page="home">
+  <div class="home">
+    <div class="clock-stage">
+      <div class="face digital">
+        <div class="time" id="time-digital"></div>
+        <div class="date" id="date-digital"></div>
+      </div>
+    </div>
+    <div class="home-footer">
+      <div class="weather-mini">
+        <span class="wico" id="home-wico"></span>
+        <div>
+          <div class="wtemp" id="home-wtemp">--&deg;</div>
+          <div class="wcond" id="home-wcond">No weather yet</div>
+        </div>
+      </div>
+      <div class="footer-right">
+        <span class="hint" id="home-hint">Tap to talk</span>
+        <button class="chip" data-ui id="alarm-chip">Alarms &middot; 0</button>
+        <button class="chip" data-ui id="timer-chip">Timers &middot; 0</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- WEATHER -->
+<section class="page" data-page="weather">
+  <div class="weather-page">
+    <div class="wx-hero">
+      <div>
+        <div class="wx-temp-big" id="wx-temp">--&deg;</div>
+        <div class="wx-sub" id="wx-sub">No weather yet</div>
+        <div class="wx-hilo placeholder"><span>H <b>--</b></span><span>L <b>--</b></span><span>Wind <b>--</b></span></div>
+      </div>
+      <div class="wx-glyph" id="wx-glyph"></div>
+    </div>
+    <div class="hourly placeholder">
+      <div class="empty-note">Hourly forecast is not wired up yet</div>
+    </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- WORLD CLOCK -->
+<section class="page" data-page="world">
+  <div class="world-page">
+    <div class="world-top">
+      <div class="map-box">
+        <canvas id="world-map"></canvas>
+      </div>
+      <div class="hero-city">
+        <div class="hero-name" id="hero-name">SYRACUSE</div>
+        <div class="hero-time" id="hero-time">--:--</div>
+        <div class="hero-date" id="hero-date"></div>
+      </div>
+    </div>
+    <div class="city-list" id="city-list"></div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- SCORES -->
+<section class="page" data-page="scores">
+  <div class="scores-page" id="scores-list">
+    <div class="score-card placeholder">
+      <div class="team"><div class="badge">--</div><div class="team-name">&mdash;<span>Home</span></div></div>
+      <div class="score-num">--</div>
+      <div class="game-meta">&mdash;</div>
+      <div class="score-num">--</div>
+      <div class="team right"><div class="team-name">&mdash;<span>Away</span></div><div class="badge">--</div></div>
+    </div>
+    <div class="score-card placeholder">
+      <div class="team"><div class="badge">--</div><div class="team-name">&mdash;<span>Home</span></div></div>
+      <div class="score-num">--</div>
+      <div class="game-meta">&mdash;</div>
+      <div class="score-num">--</div>
+      <div class="team right"><div class="team-name">&mdash;<span>Away</span></div><div class="badge">--</div></div>
+    </div>
+    <div class="empty-note">No scores yet</div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- FLIGHTS -->
+<section class="page" data-page="flights">
+  <div class="flights-page">
+    <div class="radar placeholder">
+      <svg viewBox="0 0 150 150">
+        <circle cx="75" cy="75" r="70" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+        <circle cx="75" cy="75" r="46" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+        <circle cx="75" cy="75" r="22" fill="none" stroke="rgba(79,140,255,0.15)" stroke-width="1"/>
+        <line x1="75" y1="5" x2="75" y2="145" stroke="rgba(79,140,255,0.1)" stroke-width="1"/>
+        <line x1="5" y1="75" x2="145" y2="75" stroke="rgba(79,140,255,0.1)" stroke-width="1"/>
+        <circle cx="75" cy="75" r="3" fill="rgba(242,244,247,0.55)"/>
+        <g id="radar-planes"></g>
+      </svg>
+    </div>
+    <div class="flight-list" id="flight-list">
+      <div class="flight-row placeholder">
+        <div><div class="flight-code">&mdash;</div><div class="flight-route">no traffic data</div></div>
+        <div class="flight-stat">&mdash;</div>
+      </div>
+      <div class="empty-note">Nothing overhead yet</div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------------- NEWS -->
+<section class="page" data-page="news">
+  <div class="news-page">
+    <div>
+      <div class="news-tag placeholder-tag" id="news-tag">HEADLINES</div>
+      <div class="news-headline placeholder" id="news-headline">No headlines yet</div>
+      <div class="news-meta" id="news-meta">The news feed is not wired up yet</div>
+    </div>
+    <div class="ticker" id="news-ticker-wrap">
+      <div class="ticker-track placeholder" id="news-ticker"><span>&mdash;</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- STOCKS -->
+<section class="page" data-page="stocks">
+  <div class="stocks-page" id="stocks-list">
+    <div class="stock-row placeholder">
+      <div class="stock-id"><div class="stock-sym">&mdash;</div><div class="stock-name">no quote</div></div>
+      <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,13 70,13" fill="none" stroke="rgba(242,244,247,0.2)" stroke-width="2"/></svg>
+      <div class="stock-price"><div class="stock-val">--</div><div class="stock-chg">--</div></div>
+    </div>
+    <div class="stock-row placeholder">
+      <div class="stock-id"><div class="stock-sym">&mdash;</div><div class="stock-name">no quote</div></div>
+      <svg class="stock-spark" viewBox="0 0 70 26"><polyline points="0,13 70,13" fill="none" stroke="rgba(242,244,247,0.2)" stroke-width="2"/></svg>
+      <div class="stock-price"><div class="stock-val">--</div><div class="stock-chg">--</div></div>
+    </div>
+    <div class="empty-note">No market data yet</div>
+  </div>
+</section>
+
+<div id="pager"></div>
+
+<!-- The conversation overlay. Shown for any non-idle ui state; hides the
+     pager and stops the idle cycle. -->
+<div id="convo" class="hidden">
+  <div class="convo-pill"><span class="convo-dot"></span><span id="convo-label">Listening</span></div>
+  <div id="convo-hint" class="hidden">tap to keep talking</div>
+</div>
+
+<!-- Pushed server cards (display / display_clear). Full-bleed, above
+     everything the pages draw, below the native camera indicator. -->
+<div id="card" class="hidden"><div id="card-body"></div></div>
+
+<script src="world.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

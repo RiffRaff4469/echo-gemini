@@ -1,0 +1,305 @@
+/*
+ * Ambient UI for the Echo Show 5 panel (960x480), ported from
+ * docs/ui-mockup/mockup.html. The device chrome (bezel, fabric, camera dot)
+ * is gone -- this IS the screen now -- and the pagination dots moved from the
+ * mockup's fabric base onto the screen's bottom edge, since the physical base
+ * is not ours to draw on.
+ *
+ * Everything here is local: the two fonts are bundled in fonts/, and there is
+ * no network reference of any kind. The device has no internet.
+ */
+
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('fonts/space-grotesk-latin.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('fonts/inter-latin.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root{
+  --void:#05070a;
+  --glass: rgba(255,255,255,0.05);
+  --glass-strong: rgba(255,255,255,0.09);
+  --line: rgba(255,255,255,0.08);
+  --ink:#f2f4f7;
+  --ink-dim: rgba(242,244,247,0.55);
+  --ink-faint: rgba(242,244,247,0.32);
+  --blue:#4f8cff;
+  --amber:#ffb454;
+  --green:#35d399;
+  --red:#ff5c5c;
+  --purple:#b06bff;
+
+  /* The ring and the conversation pill both read from this, so one JS write
+     recolours the whole conversation chrome. */
+  --state: var(--blue);
+}
+
+*{ box-sizing:border-box; }
+
+html,body{
+  margin:0; padding:0; width:100%; height:100%;
+  background: radial-gradient(ellipse at 50% 15%, #12161c 0%, var(--void) 62%);
+  color:var(--ink);
+  font-family:'Inter', sans-serif;
+  overflow:hidden;
+  /* An ambient display is not a document: nothing selects, nothing scrolls,
+     nothing shows a tap flash. */
+  user-select:none; -webkit-user-select:none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+/* ---------------------------------------------------------------- ring --- */
+#ring{
+  position:fixed; top:0; right:0; bottom:0; left:0; pointer-events:none; z-index:40;
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow .35s ease;
+}
+#ring.active{
+  animation: ring-pulse 1.8s ease-in-out infinite;
+}
+@keyframes ring-pulse{
+  0%,100%{ box-shadow: inset 0 0 0 3px var(--state), inset 0 0 18px 3px var(--state); opacity:.62; }
+  50%    { box-shadow: inset 0 0 0 3px var(--state), inset 0 0 30px 6px var(--state); opacity:1; }
+}
+
+/* -------------------------------------------------------------- top bar --- */
+/* Left-anchored on purpose: the native camera indicator owns the top-right
+   corner and must never be argued with. */
+#topbar{
+  position:fixed; top:12px; left:26px; z-index:20;
+  display:flex; align-items:center; gap:9px;
+  font-size:11px; color:var(--ink-faint); letter-spacing:.04em;
+}
+.dot{ width:8px; height:8px; border-radius:50%; background:var(--ink-faint); }
+.dot.online{ background:var(--green); box-shadow:0 0 7px rgba(53,211,153,0.9); }
+.dot.connecting{ background:var(--amber); box-shadow:0 0 7px rgba(255,180,84,0.75); }
+.dot.offline{ background:var(--red); box-shadow:0 0 7px rgba(255,92,92,0.9); }
+
+/* ---------------------------------------------------------------- pages --- */
+.page{
+  position:fixed; top:0; right:0; bottom:0; left:0; z-index:10;
+  display:none; flex-direction:column;
+  padding:34px 26px 30px 26px;
+}
+.page.visible{ display:flex; }
+
+#pager{
+  position:fixed; left:0; right:0; bottom:2px; z-index:20;
+  height:28px; display:flex; align-items:center; justify-content:center; gap:2px;
+}
+/* The dot is 6px because that is what reads right from across a room; the
+   box around it is 26px because that is what a thumb hits. Drawing the dot
+   as ::before is what lets the two sizes disagree. */
+.pdot{ width:26px; height:26px; display:flex; align-items:center; justify-content:center; }
+.pdot::before{
+  content:''; width:6px; height:6px; border-radius:50%;
+  background:rgba(255,255,255,0.22);
+  transition: background .2s, transform .2s;
+}
+.pdot.on::before{ background:var(--blue); transform:scale(1.35); }
+/* A pinned page is one the user chose; it says so until the cycle resumes. */
+.pdot.pinned::before{ background:var(--amber); }
+#pager.hidden{ display:none; }
+
+/* ----------------------------------------------------------- home page --- */
+.home{ flex:1; display:flex; flex-direction:column; justify-content:space-between; }
+.clock-stage{ flex:1; display:flex; align-items:center; }
+.face{ width:100%; }
+.face.digital .time{
+  font-family:'Space Grotesk', sans-serif; font-weight:600;
+  font-size:122px; line-height:.95; letter-spacing:-.01em;
+  font-variant-numeric: tabular-nums;
+}
+.face.digital .time .colon{ opacity:.5; }
+.face.digital .time .ampm{ font-size:.34em; margin-left:12px; color:var(--ink-dim); font-weight:500; }
+.face.digital .date{ font-size:16px; color:var(--ink-dim); margin-top:6px; font-weight:500; }
+
+.home-footer{
+  display:flex; align-items:flex-end; justify-content:space-between;
+  padding-top:10px; border-top:1px solid var(--line);
+}
+.weather-mini{ display:flex; align-items:center; gap:10px; padding-top:12px; }
+.wico{ width:30px; height:30px; display:block; }
+.wico svg{ width:100%; height:100%; display:block; }
+.wtemp{ font-size:22px; font-weight:600; font-family:'Space Grotesk',sans-serif; }
+.wcond{ font-size:11px; color:var(--ink-dim); }
+.hint{ font-size:11px; color:var(--ink-faint); }
+.footer-right{ display:flex; align-items:center; gap:10px; padding-top:12px; }
+/* The alarm/timer chips the native ambient floated over its bottom-right
+   corner, in the same place, opening the same native schedule screens. */
+.chip{
+  font-family:'Inter',sans-serif; font-size:13px; color:rgba(232,238,247,0.91);
+  background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
+  border-radius:11px; padding:8px 14px;
+}
+.chip:active{ background:rgba(255,255,255,0.16); }
+
+/* -------------------------------------------------------- weather page --- */
+.weather-page{ flex:1; display:flex; flex-direction:column; }
+.wx-hero{ flex:1; display:flex; align-items:center; justify-content:space-between; }
+.wx-temp-big{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:92px; line-height:1; }
+.wx-sub{ color:var(--ink-dim); font-size:14px; margin-top:6px; }
+.wx-hilo{ display:flex; gap:14px; margin-top:10px; font-size:12px; color:var(--ink-dim); }
+.wx-hilo b{ color:var(--ink); font-weight:600; }
+.wx-glyph{ width:112px; height:112px; }
+.wx-glyph svg{ width:100%; height:100%; display:block; }
+.hourly{
+  display:flex; align-items:center; justify-content:center;
+  border-top:1px solid var(--line); padding-top:10px; min-height:44px;
+}
+
+/* --------------------------------------------------------- world clock --- */
+.world-page{ flex:1; display:flex; flex-direction:column; gap:10px; }
+.world-top{ flex:1; display:flex; align-items:center; gap:18px; }
+/* Height in px rather than an aspect-ratio: the projection letterboxes itself
+   to whatever box it is given (see world.js), and aspect-ratio is newer than
+   the Chromium this ROM's WebView may turn out to be. */
+.map-box{ flex:1; height:250px; position:relative; border-radius:8px; overflow:hidden; }
+#world-map{ width:100%; height:100%; display:block; }
+.hero-city{ width:236px; flex-shrink:0; }
+.hero-name{ font-size:11px; letter-spacing:.14em; color:var(--amber); font-weight:600; }
+.hero-time{
+  font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:54px;
+  line-height:1.05; font-variant-numeric: tabular-nums; margin-top:2px;
+}
+.hero-date{ font-size:12px; color:var(--ink-dim); }
+.city-list{ display:flex; gap:10px; }
+.city-card{
+  flex:1; background:var(--glass); border:1px solid var(--line); border-radius:10px;
+  padding:7px 10px; text-align:center;
+}
+.city-card .cname{ font-size:10px; color:var(--ink-dim); }
+.city-card .ctime{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:16px; margin-top:2px; font-variant-numeric: tabular-nums; }
+.city-card .cbadge{ font-size:9px; color:var(--ink-faint); margin-top:1px; }
+
+/* -------------------------------------------------------------- scores --- */
+.scores-page{ flex:1; display:flex; flex-direction:column; gap:8px; justify-content:center; }
+.score-card{
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--glass); border:1px solid var(--line); border-radius:12px; padding:8px 16px;
+}
+.team{ display:flex; align-items:center; gap:9px; width:38%; }
+.team.right{ justify-content:flex-end; text-align:right; }
+.badge{
+  width:26px; height:26px; border-radius:7px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; font-family:'Space Grotesk',sans-serif;
+  background:rgba(255,255,255,0.10);
+}
+.team-name{ font-size:12px; font-weight:600; }
+.team-name span{ display:block; font-size:9px; color:var(--ink-faint); font-weight:400; }
+.score-num{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:20px; width:34px; text-align:center; }
+.game-meta{ width:22%; text-align:right; font-size:10px; color:var(--ink-dim); }
+.live{ color:var(--red); font-weight:600; }
+.final{ color:var(--ink-faint); }
+
+/* ------------------------------------------------------------- flights --- */
+.flights-page{ flex:1; display:flex; gap:18px; align-items:center; }
+.radar{ position:relative; width:170px; height:170px; flex-shrink:0; }
+.radar svg{ width:100%; height:100%; }
+.plane-tag{
+  position:absolute; font-size:9px; color:var(--blue); font-weight:600;
+  white-space:nowrap; transform:translate(-50%,-140%);
+}
+.flight-list{ flex:1; display:flex; flex-direction:column; gap:8px; }
+.flight-row{
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--glass); border:1px solid var(--line); border-radius:10px;
+  padding:8px 12px; font-size:11px;
+}
+.flight-code{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:13px; }
+.flight-route{ color:var(--ink-dim); font-size:10px; }
+.flight-stat{ text-align:right; color:var(--ink-dim); font-size:10px; }
+.flight-stat b{ color:var(--ink); font-family:'Space Grotesk',sans-serif; }
+
+/* ---------------------------------------------------------------- news --- */
+.news-page{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:14px; }
+.news-tag{
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--red); color:#fff; font-size:10px; font-weight:700;
+  letter-spacing:.06em; padding:3px 10px; border-radius:4px; width:fit-content;
+}
+.news-tag.placeholder-tag{ background:rgba(255,255,255,0.12); color:var(--ink-dim); }
+.news-headline{ font-size:28px; font-weight:600; line-height:1.2; max-width:88%; margin-top:8px; }
+.news-meta{ font-size:11px; color:var(--ink-faint); margin-top:6px; }
+.ticker{ overflow:hidden; white-space:nowrap; border-top:1px solid var(--line); padding-top:10px; }
+.ticker-track{
+  display:inline-block; padding-left:100%;
+  animation: scroll-left 22s linear infinite;
+  font-size:12px; color:var(--ink-dim);
+}
+.ticker-track.placeholder{ animation:none; padding-left:0; }
+.ticker-track span{ margin-right:40px; }
+@keyframes scroll-left{ from{ transform:translateX(0); } to{ transform:translateX(-100%); } }
+
+/* -------------------------------------------------------------- stocks --- */
+.stocks-page{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:8px; }
+.stock-row{
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--glass); border:1px solid var(--line); border-radius:10px; padding:9px 14px;
+}
+.stock-id{ display:flex; flex-direction:column; }
+.stock-sym{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:14px; }
+.stock-name{ font-size:10px; color:var(--ink-faint); }
+.stock-spark{ width:70px; height:26px; }
+.stock-price{ text-align:right; }
+.stock-val{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:14px; }
+.stock-chg{ font-size:11px; font-weight:600; color:var(--ink-faint); }
+.up{ color:var(--green); }
+.down{ color:var(--red); }
+
+/* --------------------------------------------------------- placeholders --- */
+/* Real data has not arrived. It has to LOOK like it has not arrived: a
+   convincing fake row on an ambient display is a lie you read every morning. */
+.placeholder{ opacity:.34; filter:saturate(0); }
+.empty-note{
+  font-size:11px; color:var(--ink-faint); text-align:center;
+  letter-spacing:.04em; padding-top:4px;
+}
+
+/* ------------------------------------------------------------ overlays --- */
+#convo{
+  position:fixed; top:0; right:0; bottom:0; left:0; z-index:30;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+  background: radial-gradient(ellipse at 50% 50%, rgba(5,7,10,0.72) 0%, rgba(5,7,10,0.94) 70%);
+}
+#convo.hidden{ display:none; }
+.convo-pill{
+  display:flex; align-items:center; gap:14px;
+  font-size:34px; font-weight:600; letter-spacing:.01em;
+  color:var(--state);
+}
+.convo-dot{
+  width:18px; height:18px; border-radius:50%; background:var(--state);
+  box-shadow:0 0 18px var(--state);
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes breathe{ 0%,100%{ opacity:.45; } 50%{ opacity:1; } }
+#convo-hint{ font-size:13px; color:var(--ink-dim); transition: opacity .4s ease; }
+#convo-hint.hidden{ display:none; }
+
+#card{ position:fixed; top:0; right:0; bottom:0; left:0; z-index:35; background:#000; opacity:0; transition: opacity .32s ease; }
+#card.shown{ opacity:1; }
+#card.hidden{ display:none; }
+#card-body, #card-body iframe{ width:100%; height:100%; border:0; display:block; }
+.card-wrap{
+  height:100%; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; text-align:center;
+  padding:0 40px;
+}
+.card-main{ font-size:58px; font-weight:300; line-height:1.05; }
+.card-sub{ font-size:24px; color:#b9c2cf; margin-top:14px; }
+.card-img{ max-width:100%; max-height:100%; object-fit:contain; }
+.card-count{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-variant-numeric: tabular-nums; }
+.card-bar{ width:70%; height:6px; border-radius:3px; background:rgba(255,255,255,0.16); margin-top:18px; overflow:hidden; }
+.card-bar > i{ display:block; height:100%; background:var(--blue); }
