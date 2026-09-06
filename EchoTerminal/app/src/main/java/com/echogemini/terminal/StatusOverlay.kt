@@ -40,6 +40,9 @@ class StatusOverlay(context: Context) : View(context) {
     private val handler = Handler(Looper.getMainLooper())
     private var pulsePhase = 0f
 
+    /** Reused: the camera pill repaints ~16 times a second while streaming. */
+    private val pill = RectF()
+
     var state: Protocol.UiState = Protocol.UiState.IDLE
         set(value) {
             if (field == value) return
@@ -104,13 +107,24 @@ class StatusOverlay(context: Context) : View(context) {
             Protocol.UiState.IDLE -> return
         }
 
-        statePaint.color = colour
-        statePaint.textSize = h * 0.42f
-        val baseline = h * 0.66f
+        // Sits in a soft pill tinted with its own colour, so the conversation
+        // band belongs to the ambient home screen it floats over rather than
+        // looking like text dropped on top of it. Same labels, same colours,
+        // same trigger -- only the surround is new.
+        statePaint.textSize = h * 0.36f
+        val textWidth = statePaint.measureText(label)
+        val left = h * 0.30f
+        pill.set(left, h * 0.18f, left + textWidth + h * 1.10f, h * 0.82f)
 
+        pillPaint.color = Color.argb(
+            40, Color.red(colour), Color.green(colour), Color.blue(colour)
+        )
+        canvas.drawRoundRect(pill, h * 0.32f, h * 0.32f, pillPaint)
+
+        statePaint.color = colour
         dotPaint.color = colour
-        canvas.drawCircle(h * 0.42f, h * 0.5f, h * 0.14f, dotPaint)
-        canvas.drawText(label, h * 0.68f, baseline, statePaint)
+        canvas.drawCircle(left + h * 0.36f, h * 0.5f, h * 0.12f, dotPaint)
+        canvas.drawText(label, left + h * 0.60f, h * 0.63f, statePaint)
     }
 
     private fun drawCameraPill(canvas: Canvas, w: Float, h: Float) {
@@ -126,7 +140,7 @@ class StatusOverlay(context: Context) : View(context) {
         val left = w - pillWidth - h * 0.3f
 
         pillPaint.color = red
-        val pill = RectF(left, h * 0.15f, w - h * 0.3f, h * 0.85f)
+        pill.set(left, h * 0.15f, w - h * 0.3f, h * 0.85f)
         canvas.drawRoundRect(pill, h * 0.35f, h * 0.35f, pillPaint)
 
         dotPaint.color = Color.WHITE
@@ -142,7 +156,7 @@ class StatusOverlay(context: Context) : View(context) {
         val left = w - pillWidth - h * 0.3f
 
         pillPaint.color = Color.parseColor("#4A5568")
-        val pill = RectF(left, h * 0.15f, w - h * 0.3f, h * 0.85f)
+        pill.set(left, h * 0.15f, w - h * 0.3f, h * 0.85f)
         canvas.drawRoundRect(pill, h * 0.35f, h * 0.35f, pillPaint)
         canvas.drawText(label, left + h * 0.5f, h * 0.63f, camTextPaint)
     }

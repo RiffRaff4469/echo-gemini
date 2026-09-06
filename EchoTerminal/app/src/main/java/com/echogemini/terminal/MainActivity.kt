@@ -7,11 +7,13 @@ import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
+import android.graphics.drawable.GradientDrawable
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -25,6 +27,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -123,28 +126,47 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     /**
      * The clock is built and shown before anything network- or hardware-related
      * is touched, and the order is not incidental.
+     *
+     * The ambient layer is full-bleed rather than sharing the screen with a row
+     * of buttons: its gradient IS the background, so anything sitting in a
+     * separate slot below it would be a black bar under a sky. The alarm and
+     * timer tiles are instead translucent chips floated over the bottom-right
+     * corner, opposite the weather card the clock draws bottom-left.
      */
     private fun buildUi() {
         root = FrameLayout(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
 
         clock = AmbientClock(this)
-        val home = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        home.addView(clock, LinearLayout.LayoutParams(-1, 0, 3f))
-        val tiles = LinearLayout(this)
+        root.addView(clock, FrameLayout.LayoutParams(-1, -1))
+
         scheduler = AlarmScheduler.get(this)
         scheduleScreen = ScheduleScreen(this, scheduler) { requestExactAlarms() }
-        alarmTile = Button(this).apply {
-            textSize = 25f; isAllCaps = false
-            setOnClickListener { push.fadeToClock("alarms"); scheduleScreen.open("alarm") }
+
+        // Proportions match what AmbientClock reserves for its own bottom rail,
+        // so the chips and the weather card sit on one line.
+        val panelHeight = resources.displayMetrics.heightPixels
+        val tileHeight = (panelHeight * 0.19f).toInt()
+        alarmTile = ambientTile(tileHeight) {
+            push.fadeToClock("alarms"); scheduleScreen.open("alarm")
         }
-        timerTile = Button(this).apply {
-            textSize = 25f; isAllCaps = false
-            setOnClickListener { push.fadeToClock("timers"); scheduleScreen.open("timer") }
+        timerTile = ambientTile(tileHeight) {
+            push.fadeToClock("timers"); scheduleScreen.open("timer")
         }
-        tiles.addView(alarmTile, LinearLayout.LayoutParams(0, -1, 1f))
-        tiles.addView(timerTile, LinearLayout.LayoutParams(0, -1, 1f))
-        home.addView(tiles, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(home, FrameLayout.LayoutParams(-1, -1))
+        val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tiles.addView(alarmTile, LinearLayout.LayoutParams(-2, -1))
+        tiles.addView(
+            timerTile,
+            LinearLayout.LayoutParams(-2, -1).apply {
+                marginStart = (tileHeight * 0.16f).toInt()
+            }
+        )
+        root.addView(
+            tiles,
+            FrameLayout.LayoutParams(-2, tileHeight, Gravity.BOTTOM or Gravity.END).apply {
+                bottomMargin = (panelHeight * 0.06f).toInt()
+                marginEnd = (resources.displayMetrics.widthPixels * 0.035f).toInt()
+            }
+        )
         updateTiles()
 
         push = PushSurface(this)
@@ -169,6 +191,31 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
         setContentView(root)
         clock.dimFactor = AmbientClock.dimForHour()
+    }
+
+    /**
+     * A translucent chip rather than a Material button: the default button
+     * background is an opaque grey rectangle with an elevation shadow, which on
+     * an ambient gradient reads as a bug. Same click behaviour and same label
+     * as before -- only the skin changed.
+     */
+    private fun ambientTile(height: Int, onClick: () -> Unit): Button = Button(this).apply {
+        isAllCaps = false
+        setTextColor(android.graphics.Color.argb(232, 226, 233, 244))
+        setTextSize(TypedValue.COMPLEX_UNIT_PX, height * 0.26f)
+        background = GradientDrawable().apply {
+            cornerRadius = height * 0.22f
+            setColor(android.graphics.Color.argb(20, 255, 255, 255))
+            setStroke(
+                max(1, (resources.displayMetrics.heightPixels * 0.0025f).toInt()),
+                android.graphics.Color.argb(38, 255, 255, 255)
+            )
+        }
+        val pad = (height * 0.34f).toInt()
+        setPadding(pad, 0, pad, 0)
+        elevation = 0f
+        stateListAnimator = null
+        setOnClickListener { onClick() }
     }
 
     override fun onResume() {
@@ -403,6 +450,18 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             }
 
             Protocol.Type.DISPLAY_CLEAR -> runOnUiThread { push.fadeToClock("cleared") }
+
+            // Ambient decoration, and treated as such: an unreadable payload is
+            // logged and dropped, never answered with an error and never
+            // allowed to clear a good reading the card is already showing.
+            Protocol.Type.WEATHER -> {
+                val reading = Protocol.Weather.from(msg)
+                if (reading == null) {
+                    Log.w(TAG, "unusable weather payload; keeping the last reading")
+                } else {
+                    runOnUiThread { clock.weather = reading }
+                }
+            }
 
             Protocol.Type.VIDEO -> handleVideoRequest(msg)
 
