@@ -36,10 +36,11 @@ PROTOCOL_VERSION = 1
 
 # Additive changes inside v1 bump the MINOR only. v1.1 adds the alarm/timer
 # channel (``alarm_command`` / ``alarm_state`` / ``alarm_fired``) and the
-# ``now_playing`` display card. A v1.0 peer stays compatible: it simply never
-# sends or understands the new types, and both sides ignore what they do not
-# recognise. ``hello`` and ``welcome`` announce it so each end can log the skew.
-PROTOCOL_MINOR = 1
+# ``now_playing`` display card; v1.2 adds ``weather``, pushed for the ambient
+# home screen. A v1.0 peer stays compatible: it simply never sends or
+# understands the new types, and both sides ignore what they do not recognise.
+# ``hello`` and ``welcome`` announce it so each end can log the skew.
+PROTOCOL_MINOR = 2
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
@@ -98,6 +99,7 @@ class MsgType(str, Enum):
     DISPLAY_CLEAR = "display_clear"
     VIDEO = "video"
     ALARM_COMMAND = "alarm_command"  # v1.1
+    WEATHER = "weather"  # v1.2
 
 
 class UiState(str, Enum):
@@ -591,6 +593,30 @@ class Video(Message):
         }
 
 
+@dataclass
+class WeatherMsg(Message):
+    """server -> device: current conditions for the ambient home screen (v1.2).
+
+    The device has no internet of its own, so this is the only way it can know
+    the weather (see ``server/weather.py``). Three fields and no more: the
+    temperature in Celsius, the WMO weather code the client maps to one of its
+    hand-drawn glyphs, and whether it is daytime *at the observed location*,
+    which is not the same question as what the device's own clock says.
+
+    Purely decorative. Losing it costs a placeholder on one card and nothing
+    else -- the clock, the link and the voice path do not read it.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.WEATHER
+
+    temp_c: float = 0.0
+    code: int = 0
+    is_day: bool = True
+
+    def fields(self) -> dict[str, Any]:
+        return {"temp_c": self.temp_c, "code": self.code, "is_day": self.is_day}
+
+
 # ---------------------------------------------------------------------------
 # Alarms and timers (v1.1)
 #
@@ -799,6 +825,7 @@ for _cls in (
     Display,
     DisplayClear,
     Video,
+    WeatherMsg,
     AlarmCommand,
     AlarmStateMsg,
     AlarmFired,
@@ -906,6 +933,21 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             width=int(data.get("width", VIDEO_EDGE)),
             height=int(data.get("height", VIDEO_EDGE)),
             jpeg_quality=int(data.get("jpeg_quality", 80)),
+            ts=ts,
+        )
+    if cls is WeatherMsg:
+        temp = data.get("temp_c")
+        if isinstance(temp, bool) or not isinstance(temp, (int, float)):
+            raise ProtocolError("weather.temp_c must be a number")
+        if not math.isfinite(float(temp)):
+            raise ProtocolError("weather.temp_c must be finite")
+        code = data.get("code", 0)
+        if isinstance(code, bool) or not isinstance(code, int):
+            raise ProtocolError("weather.code must be an integer WMO code")
+        return WeatherMsg(
+            temp_c=float(temp),
+            code=code,
+            is_day=bool(data.get("is_day", True)),
             ts=ts,
         )
     if cls is AlarmCommand:

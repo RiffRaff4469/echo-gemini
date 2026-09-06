@@ -20,3 +20,6 @@ os.environ["ECHO_SHARED_SECRET"] = "test-secret-not-a-real-one"
 os.environ.pop("GEMINI_API_KEY", None)
 os.environ["WAKE_ENABLED"] = "false"
 os.environ["WAKE_DOWNLOAD_MODELS"] = "false"
+# ...and never reach out to Open-Meteo. test_weather.py drives the poller
+# directly with an injected fetch instead.
+os.environ["WEATHER_ENABLED"] = "false"

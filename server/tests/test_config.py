@@ -27,7 +27,9 @@ def clean_env():
 
     saved = os.environ.copy()
     for name in list(os.environ):
-        if name.startswith(("ECHO_", "GEMINI_", "WAKE_", "VISION_", "SESSION_", "MIC_")):
+        if name.startswith(
+            ("ECHO_", "GEMINI_", "WAKE_", "VISION_", "SESSION_", "MIC_", "WEATHER_")
+        ):
             del os.environ[name]
     try:
         yield
@@ -126,6 +128,46 @@ def test_non_numeric_value_is_fatal(tmp_path) -> None:
         )
 
 
+def test_weather_defaults_to_syracuse(tmp_path) -> None:
+    cfg = load_config(write_env(tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\n"))
+    assert cfg.weather_enabled is True
+    assert (round(cfg.weather_lat, 4), round(cfg.weather_lon, 4)) == (43.0481, -76.1474)
+    assert cfg.weather_poll_s == 600.0
+
+
+def test_weather_location_from_the_env_file(tmp_path) -> None:
+    cfg = load_config(
+        write_env(
+            tmp_path,
+            "ECHO_SHARED_SECRET=a-long-enough-secret\n"
+            "WEATHER_LAT=51.5072\nWEATHER_LON=-0.1276\nWEATHER_POLL_S=900\n",
+        )
+    )
+    assert (cfg.weather_lat, cfg.weather_lon) == (51.5072, -0.1276)
+    assert cfg.weather_poll_s == 900.0
+
+
+def test_out_of_range_weather_latitude_is_fatal(tmp_path) -> None:
+    with pytest.raises(ConfigError):
+        load_config(
+            write_env(
+                tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\nWEATHER_LAT=91\n"
+            )
+        )
+
+
+def test_too_frequent_weather_poll_is_clamped_not_fatal(tmp_path) -> None:
+    """Open-Meteo is free and unauthenticated; hammering it is our problem to
+    prevent, but it is not worth refusing to start over."""
+    cfg = load_config(
+        write_env(
+            tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\nWEATHER_POLL_S=5\n"
+        )
+    )
+    assert cfg.weather_poll_s == 60.0
+    assert any("WEATHER_POLL_S" in w for w in cfg.warnings)
+
+
 def test_system_instruction_from_file(tmp_path, monkeypatch) -> None:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("You are a very terse clock.", encoding="utf-8")
@@ -175,6 +217,10 @@ def test_env_example_lists_every_documented_var() -> None:
         "VISION_FPS",
         "VISION_JPEG_QUALITY",
         "MIC_GAIN",
+        "WEATHER_ENABLED",
+        "WEATHER_LAT",
+        "WEATHER_LON",
+        "WEATHER_POLL_S",
         "LOG_LEVEL",
         "RECORD_AUDIO_DIR",
     ):

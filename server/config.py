@@ -110,6 +110,15 @@ class Config:
     # "I could not reach the display" beats ten seconds of dead air.
     alarm_ack_timeout_s: float = 3.0
 
+    # --- ambient weather ----------------------------------------------------
+    # Pushed to the device's home screen. The Show has no internet of its own,
+    # so this is fetched here (Open-Meteo, no API key) and sent over the link.
+    # Defaults are Syracuse, NY.
+    weather_enabled: bool = True
+    weather_lat: float = 43.0481
+    weather_lon: float = -76.1474
+    weather_poll_s: float = 600.0
+
     # --- device tuning ------------------------------------------------------
     # Software gain applied on-device before uplink. The real value comes from
     # the Phase 3 mic measurement -- see docs/HARDWARE-STATUS.md.
@@ -133,6 +142,7 @@ class Config:
             f"live={'on:' + self.gemini_model if self.live_enabled else 'off (no GEMINI_API_KEY)'} "
             f"wake={self.wake_model if self.wake_enabled else 'off'} "
             f"vision={self.vision_mode} "
+            f"weather={f'{self.weather_lat:.3f},{self.weather_lon:.3f}' if self.weather_enabled else 'off'} "
             f"idle_close={self.session_idle_timeout_s:g}s"
         )
 
@@ -173,6 +183,10 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         vision_fps=_env_float("VISION_FPS", 1.0),
         vision_jpeg_quality=_env_int("VISION_JPEG_QUALITY", 80),
         alarm_ack_timeout_s=_env_float("ALARM_ACK_TIMEOUT_S", 3.0),
+        weather_enabled=_env_bool("WEATHER_ENABLED", True),
+        weather_lat=_env_float("WEATHER_LAT", 43.0481),
+        weather_lon=_env_float("WEATHER_LON", -76.1474),
+        weather_poll_s=_env_float("WEATHER_POLL_S", 600.0),
         mic_gain=_env_float("MIC_GAIN", 1.0),
         log_level=_env("LOG_LEVEL", "INFO").upper(),
         record_audio_dir=_env("RECORD_AUDIO_DIR", ""),
@@ -193,6 +207,17 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         raise ConfigError("ALARM_ACK_TIMEOUT_S must be in (0, 30]")
     if not 0.0 < cfg.wake_threshold <= 1.0:
         raise ConfigError("WAKE_THRESHOLD must be in (0, 1]")
+    if not -90.0 <= cfg.weather_lat <= 90.0:
+        raise ConfigError(f"WEATHER_LAT must be in [-90, 90], got {cfg.weather_lat}")
+    if not -180.0 <= cfg.weather_lon <= 180.0:
+        raise ConfigError(f"WEATHER_LON must be in [-180, 180], got {cfg.weather_lon}")
+    if cfg.weather_poll_s < 60.0:
+        # Open-Meteo is free and unauthenticated; polling it harder than once a
+        # minute is rude and buys nothing (the data updates hourly).
+        cfg.warnings.append(
+            f"WEATHER_POLL_S={cfg.weather_poll_s:g} is below the 60 s floor; using 60"
+        )
+        cfg.weather_poll_s = 60.0
 
     if not cfg.shared_secret:
         raise ConfigError(

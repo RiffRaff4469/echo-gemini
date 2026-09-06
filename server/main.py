@@ -43,6 +43,7 @@ from protocol import (  # noqa: E402
     UiState,
 )
 from wake import WakeWordEngine, build_detector  # noqa: E402
+from weather import Reading, WeatherPoller  # noqa: E402
 
 log = logging.getLogger("echo.server")
 
@@ -183,6 +184,15 @@ class Hub:
             self.push_alarm_command, timeout_s=cfg.alarm_ack_timeout_s
         )
         self.session = LiveSessionManager(cfg, self)
+        # Decoration for the home screen, on its own background task. Nothing
+        # in the voice path awaits it, and a failed fetch is logged and dropped
+        # (see server/weather.py).
+        self.weather = WeatherPoller(
+            latitude=cfg.weather_lat,
+            longitude=cfg.weather_lon,
+            interval_s=cfg.weather_poll_s,
+            on_reading=self.push_weather,
+        )
         self._recorder: Any = None
         if cfg.record_audio_dir:
             self._recorder = _AudioRecorder(Path(cfg.record_audio_dir))
@@ -345,6 +355,14 @@ class Hub:
         # Ask for the schedule up front (no ack wait -- it is only a cache
         # refresh) so /health and the first list_alarms have something to say.
         link.send_msg(P.AlarmCommand(op=P.AlarmOp.LIST))
+        # The home screen shows a placeholder until the first reading arrives,
+        # so send whatever is cached now rather than making it wait out the
+        # poll interval. With nothing cached yet, cut the current wait short.
+        if self.cfg.weather_enabled:
+            if self.weather.last is not None:
+                self.push_weather(self.weather.last)
+            else:
+                self.weather.refresh_soon()
 
     async def _on_tap(self, msg: P.Tap) -> None:
         if not msg.pressed:
@@ -430,6 +448,18 @@ class Hub:
         if self.link:
             self.link.send_msg(P.DisplayClear())
 
+    def push_weather(self, reading: Reading) -> None:
+        """Send one observation down. A no-op with no device attached, which is
+        the normal state for most of the ten minutes between polls."""
+        if self.link:
+            self.link.send_msg(
+                P.WeatherMsg(
+                    temp_c=reading.temp_c,
+                    code=reading.code,
+                    is_day=reading.is_day,
+                )
+            )
+
     def status(self) -> dict[str, Any]:
         return {
             "ok": True,
@@ -454,9 +484,22 @@ class Hub:
                 if self.alarms.last_state is not None
                 else None
             ),
+            # Null until the first successful fetch -- the device renders a
+            # placeholder for exactly this case.
+            "weather": (
+                {
+                    "temp_c": self.weather.last.temp_c,
+                    "code": self.weather.last.code,
+                    "is_day": self.weather.last.is_day,
+                    "age_s": round(self.weather.last.age_s(), 1),
+                }
+                if self.cfg.weather_enabled and self.weather.last is not None
+                else None
+            ),
         }
 
     async def shutdown(self) -> None:
+        await self.weather.stop()
         await self.session.stop("server shutting down")
         if self.link:
             await self.link.close(WSCloseCode.GOING_AWAY, "server shutting down")
@@ -688,9 +731,17 @@ def build_app(cfg: Config) -> web.Application:
         ]
     )
 
+    async def _on_startup(_: web.Application) -> None:
+        # Started here rather than in Hub.__init__ because it needs a running
+        # loop. Fire-and-forget: build_app must stay usable in tests that never
+        # want a network fetch, so WEATHER_ENABLED=false simply skips it.
+        if cfg.weather_enabled:
+            hub.weather.start()
+
     async def _on_cleanup(_: web.Application) -> None:
         await hub.shutdown()
 
+    app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     return app
 
