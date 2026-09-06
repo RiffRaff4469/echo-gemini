@@ -29,7 +29,9 @@ import java.nio.ByteOrder
 object Protocol {
 
     const val VERSION = 1
-    const val MINOR = 1
+    // v1.1 added alarms/timers and the now_playing card; v1.2 adds `weather`,
+    // pushed by the server for the ambient home screen.
+    const val MINOR = 2
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
     // produces and consumes exactly these so the server never resamples.
@@ -71,6 +73,7 @@ object Protocol {
         const val ALARM_COMMAND = "alarm_command"
         const val ALARM_STATE = "alarm_state"
         const val ALARM_FIRED = "alarm_fired"
+        const val WEATHER = "weather"
     }
 
     /** Server-driven UI state. */
@@ -199,6 +202,83 @@ object Protocol {
                     durationMs = if (seconds.isNaN() || seconds <= 0) 0L else (seconds * 1000).toLong(),
                     priority = msg.int("priority", 0)
                 )
+            }
+        }
+    }
+
+    /**
+     * The seven shapes [AmbientClock] knows how to draw. WMO defines ~30 codes;
+     * a glanceable card across a kitchen cannot express thirty things, so they
+     * collapse to these and the wording carries the detail.
+     */
+    enum class Condition { CLEAR, PARTLY, CLOUD, FOG, RAIN, SNOW, STORM }
+
+    /**
+     * One pushed observation: `{temp_c, code, is_day}` (protocol v1.2).
+     *
+     * The device has no internet of its own, so this is the only way it can
+     * know the weather -- the server polls Open-Meteo and pushes the result
+     * down the existing link (`server/weather.py`).
+     *
+     * [isDay] is the server's day/night flag *for the observed location*, which
+     * is what decides sun-vs-moon. It is deliberately not derived from the
+     * device clock.
+     */
+    data class Weather(val tempC: Double, val code: Int, val isDay: Boolean) {
+
+        val condition: Condition get() = conditionFor(code)
+
+        /** Short enough to sit under the temperature without wrapping. */
+        val label: String get() = describe(code)
+
+        companion object {
+            fun from(msg: Incoming): Weather? {
+                if (!msg.body.has("temp_c")) return null
+                val temp = msg.dbl("temp_c", Double.NaN)
+                if (temp.isNaN() || temp.isInfinite()) {
+                    Log.w(TAG, "weather with an unusable temp_c; ignoring")
+                    return null
+                }
+                return Weather(
+                    tempC = temp,
+                    code = msg.int("code", 0),
+                    isDay = msg.bool("is_day", true)
+                )
+            }
+
+            /** WMO 4677 code -> one of the seven drawable shapes. */
+            fun conditionFor(code: Int): Condition = when (code) {
+                0 -> Condition.CLEAR
+                1, 2 -> Condition.PARTLY
+                3 -> Condition.CLOUD
+                45, 48 -> Condition.FOG
+                51, 53, 55, 56, 57,
+                61, 63, 65, 66, 67,
+                80, 81, 82 -> Condition.RAIN
+                71, 73, 75, 77, 85, 86 -> Condition.SNOW
+                95, 96, 99 -> Condition.STORM
+                // An unknown code is far likelier to be cloud than sunshine,
+                // and a wrong sun on a grey morning reads as broken.
+                else -> Condition.CLOUD
+            }
+
+            private fun describe(code: Int): String = when (code) {
+                0 -> "Clear"
+                1 -> "Mainly clear"
+                2 -> "Partly cloudy"
+                3 -> "Overcast"
+                45, 48 -> "Fog"
+                51, 53, 55 -> "Drizzle"
+                56, 57 -> "Freezing drizzle"
+                61, 63, 65 -> "Rain"
+                66, 67 -> "Freezing rain"
+                71, 73, 75 -> "Snow"
+                77 -> "Snow grains"
+                80, 81, 82 -> "Showers"
+                85, 86 -> "Snow showers"
+                95 -> "Thunderstorm"
+                96, 99 -> "Storm with hail"
+                else -> "Cloudy"
             }
         }
     }
