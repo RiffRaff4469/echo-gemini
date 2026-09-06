@@ -37,10 +37,11 @@ PROTOCOL_VERSION = 1
 # Additive changes inside v1 bump the MINOR only. v1.1 adds the alarm/timer
 # channel (``alarm_command`` / ``alarm_state`` / ``alarm_fired``) and the
 # ``now_playing`` display card; v1.2 adds ``weather``, pushed for the ambient
-# home screen. A v1.0 peer stays compatible: it simply never sends or
+# home screen; v1.3 adds the post-answer quiet window (``session_quiet`` down,
+# ``stay`` up). A v1.0 peer stays compatible: it simply never sends or
 # understands the new types, and both sides ignore what they do not recognise.
 # ``hello`` and ``welcome`` announce it so each end can log the skew.
-PROTOCOL_MINOR = 2
+PROTOCOL_MINOR = 3
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
@@ -83,6 +84,7 @@ class MsgType(str, Enum):
     HELLO = "hello"
     PONG = "pong"
     TAP = "tap"
+    STAY = "stay"  # v1.3
     CAMERA_STATUS = "camera_status"
     DEVICE_LOG = "device_log"
     ERROR = "error"
@@ -100,6 +102,7 @@ class MsgType(str, Enum):
     VIDEO = "video"
     ALARM_COMMAND = "alarm_command"  # v1.1
     WEATHER = "weather"  # v1.2
+    SESSION_QUIET = "session_quiet"  # v1.3
 
 
 class UiState(str, Enum):
@@ -443,6 +446,24 @@ class Tap(Message):
 
 
 @dataclass
+class Stay(Message):
+    """Tap-to-stay: keep the session that is already open (v1.3).
+
+    Deliberately a separate type from ``tap`` rather than a flag on it. A tap
+    that OPENS a session and a tap that HOLDS one are different intents, and the
+    device is the only end that knows which it meant -- it can see whether the
+    screen is showing a conversation. Carries no fields: how much longer a tap
+    buys is the server's policy (``gemini_live.STAY_EXTENSION_S``), so it can be
+    retuned without reflashing the device.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.STAY
+
+    def fields(self) -> dict[str, Any]:
+        return {}
+
+
+@dataclass
 class CameraStatusMsg(Message):
     TYPE: ClassVar[MsgType] = MsgType.CAMERA_STATUS
 
@@ -615,6 +636,31 @@ class WeatherMsg(Message):
 
     def fields(self) -> dict[str, Any]:
         return {"temp_c": self.temp_c, "code": self.code, "is_day": self.is_day}
+
+
+@dataclass
+class SessionQuiet(Message):
+    """server -> device: the post-answer quiet window is running (v1.3).
+
+    The model has finished answering and the session will close itself in
+    ``closes_in_s`` seconds unless someone speaks or taps. The device needs the
+    deadline -- not just the fact -- because the affordance it draws is a hint
+    that fades in over the last few seconds; without a number it would have to
+    guess the server's ``POST_ANSWER_SILENCE_S``.
+
+    Re-sent whenever the deadline moves (a tap extends it) and once with
+    ``active=False`` when the window is cancelled or the session ends. Purely an
+    affordance: a device that ignores it simply gets no warning before the
+    session goes, which is what today's behaviour already is.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.SESSION_QUIET
+
+    active: bool = False
+    closes_in_s: float = 0.0
+
+    def fields(self) -> dict[str, Any]:
+        return {"active": self.active, "closes_in_s": self.closes_in_s}
 
 
 # ---------------------------------------------------------------------------
@@ -814,6 +860,7 @@ for _cls in (
     Hello,
     Pong,
     Tap,
+    Stay,
     CameraStatusMsg,
     DeviceLog,
     ErrorMsg,
@@ -826,6 +873,7 @@ for _cls in (
     DisplayClear,
     Video,
     WeatherMsg,
+    SessionQuiet,
     AlarmCommand,
     AlarmStateMsg,
     AlarmFired,
@@ -881,6 +929,8 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
         return Pong(nonce=int(data.get("nonce", 0)), ts=ts)
     if cls is Tap:
         return Tap(pressed=bool(data.get("pressed", True)), ts=ts)
+    if cls is Stay:
+        return Stay(ts=ts)
     if cls is CameraStatusMsg:
         return CameraStatusMsg(
             status=CameraStatus(data.get("status")),
@@ -948,6 +998,17 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             temp_c=float(temp),
             code=code,
             is_day=bool(data.get("is_day", True)),
+            ts=ts,
+        )
+    if cls is SessionQuiet:
+        closes_in = data.get("closes_in_s", 0)
+        if isinstance(closes_in, bool) or not isinstance(closes_in, (int, float)):
+            raise ProtocolError("session_quiet.closes_in_s must be a number")
+        if not math.isfinite(float(closes_in)) or closes_in < 0:
+            raise ProtocolError("session_quiet.closes_in_s must be finite and >= 0")
+        return SessionQuiet(
+            active=bool(data.get("active", False)),
+            closes_in_s=float(closes_in),
             ts=ts,
         )
     if cls is AlarmCommand:

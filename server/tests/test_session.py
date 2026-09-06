@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import gemini_live
 from config import Config
 from gemini_live import LOOK_TOOL, STOP_LOOK_TOOL, LiveSessionManager
 from protocol import CameraStatus, UiState
@@ -26,6 +27,7 @@ class RecordingSink:
         self.states: list[UiState] = []
         self.mic: list[bool] = []
         self.vision: list[bool] = []
+        self.quiet: list[tuple[bool, float]] = []
 
     async def send_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
@@ -41,6 +43,9 @@ class RecordingSink:
 
     async def set_vision(self, enabled: bool) -> None:
         self.vision.append(enabled)
+
+    async def set_quiet(self, active: bool, closes_in_s: float) -> None:
+        self.quiet.append((active, closes_in_s))
 
 
 class FakeLiveSession:
@@ -143,6 +148,9 @@ def make_config(**overrides) -> Config:
         gemini_api_key="",  # deliberately absent: the fake connector is injected
         session_idle_timeout_s=60.0,
         session_max_duration_s=0.0,
+        # Pinned rather than inherited so that retuning the shipped default does
+        # not silently change what every test in this file is measuring.
+        post_answer_silence_s=8.0,
         vision_mode="on_demand",
         wake_enabled=False,
         system_instruction="be brief",
@@ -252,6 +260,167 @@ async def test_max_duration_closes_even_a_busy_session() -> None:
         await asyncio.sleep(0.08)
         manager.touch()
     assert manager.active is False
+
+
+# --- the post-answer quiet window ------------------------------------------
+#
+# The owner's complaint that produced this: "after I ask something quick I walk
+# away and it keeps listening." A session that stays open is both billed and
+# streaming the room's microphone to the model, so it has to end shortly after
+# the answer -- WITHOUT ever risking the answer itself.
+
+
+def make_quiet_manager(
+    window: float = 0.2, **overrides
+) -> tuple[LiveSessionManager, FakeLiveSession, RecordingSink]:
+    settings = {"session_idle_timeout_s": 60.0, "post_answer_silence_s": window}
+    settings.update(overrides)
+    session = FakeLiveSession()
+    sink = RecordingSink()
+    manager = LiveSessionManager(
+        make_config(**settings), sink, connector=FakeConnector(session)
+    )
+    return manager, session, sink
+
+
+async def answer(session: FakeLiveSession, chunks: int = 2) -> None:
+    """Play a complete model turn: some audio, then turn_complete."""
+    for _ in range(chunks):
+        session.emit_audio(b"\xaa\xbb" * 50)
+    await settle(10)
+    session.emit_content(turn_complete=True)
+    await settle(10)
+
+
+async def test_quick_question_ends_the_session_shortly_after_the_answer() -> None:
+    manager, session, sink = make_quiet_manager(window=0.2)
+    await manager.start("wake")
+    manager.feed_audio(b"\x40\x10" * 320)
+    await settle()
+    await answer(session)
+
+    assert manager.active, "the window must not close the instant the answer ends"
+    await asyncio.sleep(0.6)
+    assert manager.active is False, "a quick question must not hold the session open"
+    assert sink.states[-1] is UiState.IDLE
+
+
+async def test_a_long_answer_is_never_cut_off_mid_sentence() -> None:
+    """The whole risk of a short window: killing a session while the model is
+    still talking. Model output must keep the session alive on its own, past
+    both the quiet window and the idle timeout."""
+    manager, session, _sink = make_quiet_manager(
+        window=0.15, session_idle_timeout_s=0.3
+    )
+    await manager.start("wake")
+    for _ in range(12):
+        session.emit_audio(b"\xaa\xbb" * 50)
+        await asyncio.sleep(0.08)
+        assert manager.active, "an answer in flight must never be closed"
+
+    session.emit_content(turn_complete=True)
+    await settle(10)
+    await asyncio.sleep(0.5)
+    assert manager.active is False, "and it must close once the answer is over"
+
+
+async def test_speaking_inside_the_window_continues_the_conversation() -> None:
+    manager, session, _sink = make_quiet_manager(window=0.2)
+    await manager.start("wake")
+    await answer(session)
+
+    # A follow-up question, arriving well inside the window.
+    for _ in range(6):
+        await asyncio.sleep(0.1)
+        manager.feed_audio(b"\x40\x10" * 320)
+    assert manager.active, "asking a follow-up must keep the session"
+    await manager.stop("done")
+
+
+async def test_a_tap_holds_the_session_open_past_the_window(monkeypatch) -> None:
+    monkeypatch.setattr(gemini_live, "STAY_EXTENSION_S", 0.6)
+    manager, session, _sink = make_quiet_manager(window=0.15)
+    await manager.start("wake")
+    await answer(session)
+
+    assert manager.extend_stay() is True
+    await asyncio.sleep(0.4)
+    assert manager.active, "a tap must buy more than the plain window"
+    await asyncio.sleep(0.5)
+    assert manager.active is False, "and the extension must itself expire"
+
+
+async def test_a_tap_during_the_answer_is_honoured_by_the_window_after_it(
+    monkeypatch,
+) -> None:
+    """Tapping while the model is still speaking is the natural gesture for
+    'stay with me' -- it must not be swallowed because no window is open yet."""
+    monkeypatch.setattr(gemini_live, "STAY_EXTENSION_S", 0.6)
+    manager, session, _sink = make_quiet_manager(window=0.15)
+    await manager.start("wake")
+    session.emit_audio(b"\xaa\xbb" * 50)
+    await settle(10)
+    assert manager.quiet_seconds_left is None, "no window while the model speaks"
+    manager.extend_stay()
+
+    session.emit_content(turn_complete=True)
+    await settle(10)
+    await asyncio.sleep(0.35)
+    assert manager.active, "the tap made during the answer must still count"
+    await manager.stop("done")
+
+
+async def test_repeated_taps_are_debounced() -> None:
+    manager, _session, _sink = make_quiet_manager()
+    await manager.start("wake")
+    assert manager.extend_stay() is True
+    assert manager.extend_stay() is False, "one finger, one extension"
+    await manager.stop("done")
+
+
+async def test_the_device_is_told_when_the_window_opens_and_closes() -> None:
+    """The client fades in 'tap to keep talking' near the end of the window, so
+    it needs the deadline, not just the fact that a session exists."""
+    manager, session, sink = make_quiet_manager(window=0.4)
+    await manager.start("wake")
+    await answer(session)
+    await asyncio.sleep(0.25)  # long enough for a watchdog tick, short of the close
+
+    assert sink.quiet, "the device must be told a window is running"
+    active, closes_in = sink.quiet[0]
+    assert active is True
+    assert 0.0 < closes_in <= 0.4
+
+    # Speaking again cancels it, and the device has to hear about that too or
+    # the hint keeps counting down over a live conversation.
+    manager.feed_audio(b"\x40\x10" * 320)
+    await asyncio.sleep(0.15)
+    assert sink.quiet[-1] == (False, 0.0)
+    await manager.stop("done")
+
+
+async def test_barge_in_cancels_the_window() -> None:
+    manager, session, _sink = make_quiet_manager(window=0.2)
+    await manager.start("wake")
+    await answer(session)
+    session.emit_content(interrupted=True)
+    await settle(10)
+    assert manager.quiet_seconds_left is None
+    await manager.stop("done")
+
+
+async def test_the_window_can_be_disabled_leaving_only_the_idle_timeout() -> None:
+    manager, session, _sink = make_quiet_manager(
+        window=0.0, session_idle_timeout_s=0.4
+    )
+    await manager.start("wake")
+    await answer(session)
+    await asyncio.sleep(0.15)
+    assert manager.active, "POST_ANSWER_SILENCE_S=0 must not close anything early"
+    assert manager.quiet_seconds_left is None
+
+    await asyncio.sleep(0.6)
+    assert manager.active is False, "the idle timeout is still the backstop"
 
 
 async def test_loud_audio_defers_idle_close_but_silence_does_not() -> None:

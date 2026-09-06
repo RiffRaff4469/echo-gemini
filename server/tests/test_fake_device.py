@@ -47,6 +47,7 @@ def make_device(**overrides) -> tuple[FakeDevice, StubWebSocket]:
         repeat=1,
         hold=0.0,
         shutter=False,
+        stay=0,
         save_reply=None,
     )
     for key, value in overrides.items():
@@ -168,6 +169,26 @@ async def test_display_and_clear_are_tracked() -> None:
     )
     assert device.displays == 1
     await device._on_text(P.DisplayClear().encode())  # must not raise
+
+
+async def test_stay_is_sent_when_the_quiet_window_is_announced() -> None:
+    """``--stay N`` is how the tap-to-stay path gets smoke-tested without a
+    touchscreen: each announced window costs one tap, then they run out."""
+    device, ws = make_device(stay=1)
+    await device._on_text(P.SessionQuiet(active=True, closes_in_s=8.0).encode())
+    assert isinstance(ws.text[0], P.Stay)
+    assert device.quiet_windows == 1
+
+    await device._on_text(P.SessionQuiet(active=True, closes_in_s=8.0).encode())
+    assert len(ws.text) == 1, "only --stay taps are available, and they were used"
+    assert device.quiet_windows == 2
+
+
+async def test_cancelled_quiet_window_is_not_tapped() -> None:
+    device, ws = make_device(stay=1)
+    await device._on_text(P.SessionQuiet(active=False, closes_in_s=0.0).encode())
+    assert ws.text == [], "a window that was cancelled needs no tap"
+    assert device.stays_left == 1
 
 
 async def test_undecodable_message_does_not_crash_the_harness() -> None:
