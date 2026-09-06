@@ -16,7 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import protocol as P
 from config import Config
-from main import DISPLAY_SECRET_HEADER, SECRET_HEADER, build_app
+from main import DISPLAY_SECRET_HEADER, HUB_KEY, SECRET_HEADER, build_app
 
 SECRET = "test-secret-not-a-real-one"
 
@@ -179,6 +179,17 @@ async def test_malformed_binary_frame_is_ignored_not_fatal(client: TestClient) -
         {"type": "html", "payload": {"html": "<b>hi</b>"}, "priority": 2},
         {"type": "image", "payload": {"url": "https://example.com/cat.jpg"}},
         {"type": "timer", "payload": {"label": "Eggs", "seconds": 360}},
+        {
+            "type": "now_playing",
+            "payload": {
+                "title": "Teardrop",
+                "artist": "Massive Attack",
+                "art_url": "https://example.com/art.jpg",
+                "progress_s": 42,
+                "duration_s": 330,
+                "is_playing": True,
+            },
+        },
     ],
 )
 async def test_every_display_type_reaches_the_device(
@@ -361,6 +372,109 @@ async def test_tap_without_a_key_still_drives_ui_state(client: TestClient) -> No
     assert (await device.expect(P.StateMsg)).state is P.UiState.LISTENING
     assert (await device.expect(P.StateMsg)).state is P.UiState.IDLE
     assert not device.ws.closed
+
+
+# --- alarms over the real socket --------------------------------------------
+
+
+async def test_the_server_asks_for_the_schedule_on_connect(client: TestClient) -> None:
+    """So /health and the model's first list_alarms have something to report
+    without waiting for a round trip mid-conversation."""
+    device = await FakeDevice.connect(client)
+    command = await device.expect(P.AlarmCommand)
+    assert command.op is P.AlarmOp.LIST
+
+
+async def test_alarm_state_from_the_device_reaches_health(client: TestClient) -> None:
+    device = await FakeDevice.connect(client)
+    await device.ws.send_str(
+        P.AlarmStateMsg(
+            alarms=[
+                P.AlarmEntry(
+                    id="a1",
+                    kind=P.AlarmKind.ALARM,
+                    label="Wake up",
+                    time_epoch_ms=1_800_000_000_000,
+                )
+            ]
+        ).encode()
+    )
+    # Round-trip a ping so the state has certainly been processed.
+    await device.ws.send_str(P.Ping(nonce=11).encode())
+    await device.expect(P.Pong)
+
+    body = await (await client.get("/health")).json()
+    assert body["alarms"]["alarms"][0]["label"] == "Wake up"
+
+
+async def test_health_reports_no_alarms_before_the_device_says_anything(
+    client: TestClient,
+) -> None:
+    body = await (await client.get("/health")).json()
+    assert body["alarms"] is None
+
+
+async def test_alarm_fired_without_a_session_is_accepted_quietly(
+    client: TestClient,
+) -> None:
+    """The device is already chiming locally. With no Live session there is
+    nothing to tell, and that must not be an error."""
+    device = await FakeDevice.connect(client)
+    await device.ws.send_str(
+        P.AlarmFired(kind=P.AlarmKind.TIMER, id="t1", label="Pasta").encode()
+    )
+    await device.ws.send_str(P.Ping(nonce=12).encode())
+    assert (await device.expect(P.Pong)).nonce == 12
+    assert not device.ws.closed
+
+
+async def test_an_alarm_command_reaches_the_device(client: TestClient) -> None:
+    device = await FakeDevice.connect(client)
+    hub = client.app[HUB_KEY]
+    assert hub.push_alarm_command(
+        P.AlarmCommand(op=P.AlarmOp.SET_TIMER, label="Pasta", duration_s=600)
+    )
+    # The connect-time LIST is drained by expect()'s skipping, so this is ours.
+    sent = await device.expect(P.AlarmCommand)
+    while sent.op is P.AlarmOp.LIST:
+        sent = await device.expect(P.AlarmCommand)
+    assert sent.label == "Pasta" and sent.duration_s == 600
+
+
+async def test_alarm_commands_report_offline_when_no_device_is_attached(
+    client: TestClient,
+) -> None:
+    hub = client.app[HUB_KEY]
+    assert hub.push_alarm_command(P.AlarmCommand(op=P.AlarmOp.LIST)) is False
+
+
+async def test_alarm_tool_round_trip_waits_for_correlated_socket_ack(client: TestClient):
+    from test_alarms import FakeSchedule
+    device = await FakeDevice.connect(client)
+    await device.expect(P.AlarmCommand)  # greeting LIST
+    hub = client.app[HUB_KEY]
+    call = type("Call", (), {"name": "set_timer", "args": {"duration_s": 60, "label": "Tea"}})()
+    task = asyncio.create_task(hub.session._run_tool(call))
+    command = await device.expect(P.AlarmCommand)
+    schedule = FakeSchedule()
+    assert not schedule.apply(command)
+    alarms, timers = schedule.snapshot()
+    await device.ws.send_str(P.AlarmStateMsg(alarms=alarms, timers=timers).encode())
+    await device.ws.send_str(P.Ping(nonce=19).encode())
+    await device.expect(P.Pong)
+    assert not task.done(), "An unsolicited snapshot must not confirm a tool"
+    await device.ws.send_str(P.AlarmStateMsg(alarms=alarms, timers=timers, req_id=command.req_id).encode())
+    result = await asyncio.wait_for(task, 1)
+    assert result["ok"] and result["timers"][0]["label"] == "Tea"
+
+
+async def test_now_playing_routes_over_socket(client: TestClient):
+    device = await FakeDevice.connect(client)
+    body = {"type": "now_playing", "payload": {"title": "Example", "artist": "Artist", "progress_s": 5, "duration_s": 90}}
+    response = await client.post("/display", json=body, headers={DISPLAY_SECRET_HEADER: SECRET})
+    assert response.status == 200
+    message = await device.expect(P.Display)
+    assert message.command.payload == body["payload"]
 
 
 async def test_camera_status_from_device_is_accepted(client: TestClient) -> None:
