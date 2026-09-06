@@ -198,6 +198,8 @@ class Link(
                 put("camera", true)
                 put("display", "960x480")
                 put("tap_to_talk", true)
+                put("alarms", true)
+                put("timers", true)
             }
             webSocket.send(Protocol.hello(deviceId, appVersion, capabilities))
         }

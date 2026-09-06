@@ -1,6 +1,8 @@
 package com.echogemini.terminal
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -15,6 +17,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.Toast
+import org.json.JSONObject
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +56,10 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     private lateinit var clock: AmbientClock
     private lateinit var push: PushSurface
     private lateinit var statusBar: StatusOverlay
+    private lateinit var scheduler: AlarmScheduler
+    private lateinit var scheduleScreen: ScheduleScreen
+    private lateinit var alarmTile: Button
+    private lateinit var timerTile: Button
 
     private var link: Link? = null
     private var capture: AudioCapture? = null
@@ -83,12 +93,20 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
 
         buildUi()
+        scheduler.onChanged = {
+            scheduleScreen.render()
+            updateTiles()
+        }
+        scheduler.onFired = { playback?.flush(); link?.sendControl(it.toString()) }
+        scheduler.onState = { link?.sendControl(scheduler.snapshot()) }
+        scheduler.restore()
         hideSystemBars()
 
         // As the HOME activity, back must not escape to a blank launcher.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                // Intentionally nothing. Kiosk: there is nowhere to go back to.
+                scheduleScreen.back()
+                push.fadeToClock("back")
             }
         })
 
@@ -110,13 +128,24 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         root = FrameLayout(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
 
         clock = AmbientClock(this)
-        root.addView(
-            clock,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
+        val home = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        home.addView(clock, LinearLayout.LayoutParams(-1, 0, 3f))
+        val tiles = LinearLayout(this)
+        scheduler = AlarmScheduler.get(this)
+        scheduleScreen = ScheduleScreen(this, scheduler) { requestExactAlarms() }
+        alarmTile = Button(this).apply {
+            textSize = 25f; isAllCaps = false
+            setOnClickListener { push.fadeToClock("alarms"); scheduleScreen.open("alarm") }
+        }
+        timerTile = Button(this).apply {
+            textSize = 25f; isAllCaps = false
+            setOnClickListener { push.fadeToClock("timers"); scheduleScreen.open("timer") }
+        }
+        tiles.addView(alarmTile, LinearLayout.LayoutParams(0, -1, 1f))
+        tiles.addView(timerTile, LinearLayout.LayoutParams(0, -1, 1f))
+        home.addView(tiles, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(home, FrameLayout.LayoutParams(-1, -1))
+        updateTiles()
 
         push = PushSurface(this)
         root.addView(
@@ -127,6 +156,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
         )
 
+        root.addView(scheduleScreen, FrameLayout.LayoutParams(-1, -1))
         statusBar = StatusOverlay(this)
         root.addView(
             statusBar,
@@ -144,6 +174,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     override fun onResume() {
         super.onResume()
         clock.startTicking()
+        scheduler.restore()
+        scheduleScreen.render()
         hideSystemBars()
         lightSensor?.let {
             sensorManager?.registerListener(
@@ -163,6 +195,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         // needs a physical power cycle.
         camera?.shutdown()
         camera = null
+        scheduler.onChanged = null
+        scheduler.onFired = null
+        scheduler.onState = null
 
         capture?.stop()
         playback?.stop()
@@ -225,6 +260,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         val missing = buildList {
             if (!haveAudioPermission) add(Manifest.permission.RECORD_AUDIO)
             if (!haveCameraPermission) add(Manifest.permission.CAMERA)
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                    this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (missing.isEmpty()) {
             startAudioIfPermitted()
@@ -255,7 +293,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             }
         }
         if (capture == null) {
-            val recorder = AudioCapture { pcm -> link?.sendAudio(pcm) }
+            val recorder = AudioCapture { pcm -> if (!scheduler.isRinging) link?.sendAudio(pcm) }
             capture = if (recorder.start()) {
                 recorder
             } else {
@@ -325,6 +363,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     override fun onControl(msg: Protocol.Incoming) {
         when (msg.type) {
+            Protocol.Type.ALARM_COMMAND -> runOnUiThread {
+                link?.sendControl(scheduler.command(msg.body))
+            }
             Protocol.Type.WELCOME -> Log.i(
                 TAG,
                 "server welcome: live=${msg.bool("live_enabled")} " +
@@ -375,6 +416,20 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     override fun onAudioDown(pcm: ByteArray) {
         playback?.enqueue(pcm)
+    }
+
+    private fun updateTiles() {
+        val state = JSONObject(scheduler.snapshot())
+        alarmTile.text = "Alarms · ${state.getJSONArray("alarms").length()}"
+        timerTile.text = "Timers · ${state.getJSONArray("timers").length()}"
+    }
+
+    private fun requestExactAlarms() {
+        if (Build.VERSION.SDK_INT >= 31 && !scheduler.exactAllowed) {
+            try { startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                Uri.parse("package:$packageName"))) }
+            catch (_: Exception) { Toast.makeText(this, "Open Android settings → Alarms & reminders", Toast.LENGTH_LONG).show() }
+        }
     }
 
     // --- camera -------------------------------------------------------------

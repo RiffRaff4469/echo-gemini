@@ -345,10 +345,10 @@ your machine's power plan; do it yourself:
 
 ## Client build
 
-**Not built here.** The Kotlin sources are complete and reviewable, but this
-repo has been developed on a machine with no Android SDK, no JDK 17 and no
-Gradle, so `EchoTerminal/` has **never been compiled**. Expect to fix build
-issues on first assembly.
+The debug APK builds with JDK 17 and the Android SDK. The v2 implementation also
+has JVM tests for local scheduling, persistence, snooze, and calendar arithmetic.
+See [v2 verification](docs/BUILD-3-RESULTS.md) for commands and results.
+Hardware deployment and on-device testing are separate gates.
 
 ### What you need
 
@@ -359,18 +359,10 @@ issues on first assembly.
 | Gradle | 8.4 — via the wrapper |
 | Android Studio | Hedgehog or later, if you want an IDE |
 
-### The Gradle wrapper JAR is not in this repo
+### Gradle wrapper
 
-`gradle/wrapper/gradle-wrapper.properties` is committed; `gradle-wrapper.jar` and
-the `gradlew` scripts are not, because fabricating a binary by hand is not
-something to do quietly. Generate them once:
-
-```powershell
-cd EchoTerminal
-gradle wrapper --gradle-version 8.4
-```
-
-Or just open `EchoTerminal/` in Android Studio, which does it for you.
+The wrapper JAR, properties, and scripts are committed. Use `gradlew.bat` on
+Windows or `./gradlew` on Unix; a global Gradle installation is unnecessary.
 
 ### Configure and build
 
@@ -383,7 +375,7 @@ to the **same value** as `ECHO_SHARED_SECRET` in `.env`. Then:
 
 ```powershell
 cd EchoTerminal
-.\gradlew assembleDebug
+.\gradlew.bat testDebugUnitTest assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
@@ -450,8 +442,8 @@ Each of these is in the code for a reason that cost someone something to learn.
   sometimes miss.
 - **Half-duplex on purpose.** Suppressing the uplink while the server speaks
   sidesteps acoustic echo cancellation on a device with one weak microphone.
-- **All logic on the server.** 1 GB of RAM caps ambition on the device. Resist
-  moving work back onto the Show.
+- **Voice and vision processing stay on the server.** The clock, alarms and
+  timers run locally so they keep working with the PC switched off.
 
 ---
 
@@ -466,7 +458,8 @@ Each of these is in the code for a reason that cost someone something to learn.
 - **Camera frames go out at 720×720, not 768×768.** The sensor's native capture
   is 1280×720 and its centre square is 720; the API recommends 768 rather than
   requiring it, and upscaling would invent detail.
-- **`EchoTerminal/` has never been compiled.** See above.
+- **Hardware validation of the v2 alarm build remains outstanding.** See the
+  [verification report](docs/BUILD-3-RESULTS.md).
 
 ---
 

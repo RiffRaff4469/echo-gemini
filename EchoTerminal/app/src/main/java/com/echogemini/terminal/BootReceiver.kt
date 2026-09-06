@@ -20,6 +20,8 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_LOCKED_BOOT_COMPLETED -> {
+                AlarmScheduler.get(context).restore()
+                if (intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED) return
                 Log.i(TAG, "boot completed; starting the terminal")
                 val launch = Intent(context, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
