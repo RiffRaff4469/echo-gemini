@@ -34,6 +34,22 @@ from fake_device import load_secret  # noqa: E402
 
 CASES: list[tuple[str, dict]] = [
     (
+        "now_playing -- metadata plumbing only, no playback",
+        {
+            "type": "now_playing",
+            "payload": {
+                "title": "Example track",
+                "artist": "Example artist",
+                "album": "Example album",
+                "art_url": "https://example.com/album.jpg",
+                "progress_s": 42,
+                "duration_s": 210,
+                "is_playing": True,
+            },
+            "duration": 15,
+        },
+    ),
+    (
         "text -- the everyday case",
         {
             "type": "text",

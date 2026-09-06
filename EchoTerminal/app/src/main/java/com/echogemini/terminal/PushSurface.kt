@@ -134,6 +134,22 @@ class PushSurface(context: Context) : FrameLayout(context) {
         Protocol.DisplayType.TEXT -> textTemplate(cmd.payload)
         Protocol.DisplayType.IMAGE -> imageTemplate(cmd.payload)
         Protocol.DisplayType.TIMER -> timerTemplate(cmd.payload)
+        Protocol.DisplayType.NOW_PLAYING -> nowPlayingTemplate(cmd.payload)
+    }
+
+    private fun nowPlayingTemplate(p: JSONObject): String {
+        val duration = p.optDouble("duration_s", 0.0).coerceAtLeast(0.0)
+        val progress = p.optDouble("progress_s", 0.0).coerceIn(0.0, duration)
+        val art = p.optString("art_url")
+        val image = if (art.isEmpty()) "" else "<img style='height:35vh' src=\"${escape(art)}\" alt='Album art'>"
+        return page("""
+            <div class='wrap'>$image
+              <div class='main'>${escape(p.getString("title"))}</div>
+              <div class='sub'>${escape(p.optString("artist"))} &middot; ${escape(p.optString("album"))}</div>
+              <progress style='width:70%;margin-top:3vh' max='${duration.coerceAtLeast(1.0)}' value='$progress'></progress>
+              <div class='sub'>${if (p.optBoolean("is_playing", true)) "Now playing" else "Paused"}</div>
+            </div>
+        """)
     }
 
     private fun textTemplate(payload: JSONObject): String {

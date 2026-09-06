@@ -29,6 +29,7 @@ import java.nio.ByteOrder
 object Protocol {
 
     const val VERSION = 1
+    const val MINOR = 1
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
     // produces and consumes exactly these so the server never resamples.
@@ -67,6 +68,9 @@ object Protocol {
         const val DISPLAY = "display"
         const val DISPLAY_CLEAR = "display_clear"
         const val VIDEO = "video"
+        const val ALARM_COMMAND = "alarm_command"
+        const val ALARM_STATE = "alarm_state"
+        const val ALARM_FIRED = "alarm_fired"
     }
 
     /** Server-driven UI state. */
@@ -95,7 +99,8 @@ object Protocol {
         TEXT("text"),
         HTML("html"),
         IMAGE("image"),
-        TIMER("timer");
+        TIMER("timer"),
+        NOW_PLAYING("now_playing");
 
         companion object {
             fun from(wire: String?): DisplayType? = values().firstOrNull { it.wire == wire }
@@ -104,7 +109,7 @@ object Protocol {
 
     // --- outbound envelopes -------------------------------------------------
 
-    private fun envelope(type: String): JSONObject = JSONObject().apply {
+    fun envelope(type: String): JSONObject = JSONObject().apply {
         put("v", VERSION)
         put("t", type)
         put("ts", System.currentTimeMillis())
@@ -115,6 +120,7 @@ object Protocol {
             put("device_id", deviceId)
             put("app_version", appVersion)
             put("protocol_version", VERSION)
+            put("protocol_minor", MINOR)
             put("capabilities", capabilities)
         }.toString()
 

@@ -25,6 +25,7 @@ device whose ``hello`` announces a different major version.
 from __future__ import annotations
 
 import json
+import math
 import struct
 import time
 from dataclasses import dataclass, field
@@ -705,7 +706,7 @@ class AlarmCommand(Message):
         if self.op is AlarmOp.SET_ALARM and self.time_epoch_ms <= 0:
             raise ProtocolError("set_alarm needs a positive time_epoch_ms")
         if self.op is AlarmOp.SET_TIMER:
-            if self.duration_s <= 0:
+            if not math.isfinite(self.duration_s) or self.duration_s < 0.001:
                 raise ProtocolError("set_timer needs a positive duration_s")
             if self.duration_s > MAX_TIMER_DURATION_S:
                 raise ProtocolError(
