@@ -42,6 +42,15 @@ rebuilds; iPhone-StandBy styling and page auto-cycling are trivial in JS.
   mockup's JS). Cities: **Syracuse, Singapore, Geneva** (replace the mockup's
   Madrid/Rome). City list as a small JS config (later editable without APK
   rebuild via a config payload — v1 hardcode in the asset).
+  **Owner inspiration (2026-09-06, image reviewed via local vision model):
+  Apple solar-style DOT-MATRIX map, not filled blobs.** Spec: continents drawn
+  as a grid of uniform round dots on near-black; day-side land dots bright
+  white, night-side dots dim dark-grey; the terminator curve (already computed)
+  is the day/night boundary; city markers = small vibrant orange/amber dots
+  with name tags; one hero city gets an amber label + the large bold time next
+  to the map; keep a compact city/time card strip below (Syracuse · Singapore ·
+  Geneva). Dots ~3–4 px on ~6 px pitch at 960×480; water stays pure black so
+  the dot landmasses read as a map.
 - **Clock:** ONE big StandBy-style digital face as the default (Space Grotesk,
   tabular nums, ~120 px). The face-switcher pills and analog/bold/retro faces
   are NOT required for v1 — drop or hide them (keep code paths out; simplest
