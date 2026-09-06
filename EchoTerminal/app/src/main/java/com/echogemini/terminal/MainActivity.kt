@@ -281,6 +281,17 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
      * section 1): the microphone is weak enough that the wake word will
      * sometimes miss, and there has to be a way to talk to the thing that does
      * not depend on it hearing you first.
+     *
+     * One gesture, two meanings, and the difference is which one the user can
+     * already see on screen:
+     *
+     *  * nothing running -> `tap`, which OPENS a session (tap to talk).
+     *  * a conversation on screen -> `stay`, which HOLDS the one that is open
+     *    for another half minute (tap to keep talking, protocol v1.3).
+     *
+     * The server would treat a `tap` during a session as a plain keep-alive, so
+     * getting this wrong is not dangerous -- it would just mean the post-answer
+     * window closes on someone who was reaching for the screen to stop it.
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return super.onTouchEvent(event)
@@ -289,8 +300,13 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             Log.i(TAG, "tap ignored: link is ${link?.state}")
             return true
         }
-        Log.i(TAG, "tap to talk")
-        link?.sendTap()
+        if (statusBar.state != Protocol.UiState.IDLE) {
+            Log.i(TAG, "tap to keep talking")
+            link?.sendStay()
+        } else {
+            Log.i(TAG, "tap to talk")
+            link?.sendTap()
+        }
         return true
     }
 
@@ -400,6 +416,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 statusBar.state = Protocol.UiState.IDLE
                 statusBar.cameraStreaming = false
                 statusBar.shutterClosed = false
+                // No server, no session to keep talking to -- and no way to
+                // send the stay if the hint were tapped.
+                statusBar.clearQuietWindow()
                 capture?.uplinkEnabled = true
                 playback?.flush()
                 // And the camera goes with it. No server means no session.
@@ -420,7 +439,21 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
 
             Protocol.Type.STATE -> runOnUiThread {
-                statusBar.state = Protocol.UiState.from(msg.str("state"))
+                val next = Protocol.UiState.from(msg.str("state"))
+                statusBar.state = next
+                // The session is over; there is nothing left to keep talking to.
+                if (next == Protocol.UiState.IDLE) statusBar.clearQuietWindow()
+            }
+
+            // The model has finished answering and the server is counting down
+            // to closing the session (POST_ANSWER_SILENCE_S). Re-sent whenever
+            // the deadline moves, so a tap that extends it retracts the hint.
+            Protocol.Type.SESSION_QUIET -> runOnUiThread {
+                if (msg.bool("active", false)) {
+                    statusBar.setQuietWindow((msg.dbl("closes_in_s", 0.0) * 1000).toLong())
+                } else {
+                    statusBar.clearQuietWindow()
+                }
             }
 
             Protocol.Type.MIC -> {

@@ -181,6 +181,14 @@ class Link(
 
     fun sendTap() = sendControl(Protocol.tap(true))
 
+    /**
+     * Keep the session that is already open, rather than asking for a new one.
+     *
+     * The caller decides which of these a touch means -- see
+     * `MainActivity.onTouchEvent`. The link only carries it.
+     */
+    fun sendStay() = sendControl(Protocol.stay())
+
     fun sendCameraStatus(status: Protocol.CameraStatus, detail: String = "") =
         sendControl(Protocol.cameraStatus(status, detail))
 
