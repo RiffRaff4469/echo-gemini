@@ -1,6 +1,6 @@
 # echo-gemini — Roadmap & Status
 
-_Living document. Last updated 2026-09-07 (stopping point: commit `de622f5`)._
+_Living document. Last updated 2026-09-07 ~02:50 (commit `87b3f78` — spotify backoff + govee brief 13)._
 For the day-by-day record of where the project was left, see
 [docs/STATUS-2026-09-07.md](docs/STATUS-2026-09-07.md).
 
@@ -15,8 +15,9 @@ For the day-by-day record of where the project was left, see
 | Server | Python `echo-server` on the Windows PC, **174+ pytest green**, protocol **v1.5** |
 | Network | Device on Tailscale (`echo-show-5-1`), one outbound WebSocket to the PC — no inbound ports |
 | Voice | Wake word "hey Jarvis" (server-side openWakeWord), tap-to-talk, tap-to-stop; Jarvis answers in one short sentence |
-| Vision | Camera code live; **on-device verify pending on the custom ROM** (see Verify queue) |
-| Music | Spotify (librespot → PCM down the device link): **code complete + tested, end-to-end pending** |
+| Vision | Camera code live; **kernel layer verified healthy** (sensor found, info delivered) — HAL reports 0 devices; wall documented at HAL userspace |
+| Music | Spotify (librespot → PCM down the device link): **account linked + binary built + poll backoff fixed — first audio test pending** |
+| Lights | **Govee BLE (brief 13): H617A + H617C verified on hardware, voice tool implemented (472 tests) — voice test pending** |
 
 Everything below a checkmark is **done and verified**; un-checked items are
 open work. Checkmarks are the only thing that moves an item up the list.
@@ -57,33 +58,43 @@ open work. Checkmarks are the only thing that moves an item up the list.
 
 Owner / next-session checklist before more features land:
 
-- [ ] **Touch check on custom ROM** — axes should be correct (kernel configs and
-      `.idc` files are byte-identical to v0.6; if not, rollback is a 15-min dirty
-      flash of the v0.6 zip in `tools/echo-show-ref/stage/`).
-- [ ] **Camera on custom ROM** — "Hey Jarvis, what do you see?" must return a
-      description. (Dead on stock LOS; this is what the Phase-2 build fixes.)
+- [x] **Touch check on custom ROM** — FIXED 2026-09-07 (kernel Y-mirror + GTP_CHANGE_X2Y; X max 960 / Y max 480 verified; owner-confirmed working).
+- [x] **Wi-Fi stability** — FIXED 2026-09-07 (duplicate OWE network crashing the supplicant; forgotten; owner-confirmed stable).
+- [ ] **Camera on custom ROM** — kernel layer EXONERATED (sensor alive, both cameras' info delivered to the HAL). HAL still reports 0 devices — next step: capture logcat -b all during a boot-time enumeration (only boots trigger the search), look for camera.mt8163/libcam errors after the GETINFO2s. Remaining leads in task log `echo-show-phase2-rom`. Owner deadline: give up if the next session can't crack it.
 - [ ] **Bluetooth on custom ROM** — pair a device; confirm audio path.
-- [ ] **Mic far-field take** — record at room distance, tune wake threshold +
-      set `MIC_GAIN` to the mandated +24–28 dB in `.env`.
+- [ ] **Mic far-field take** — record at room distance, tune wake threshold + set `MIC_GAIN` to the mandated +24–28 dB in `.env`.
 - [ ] **Alarm audio on-device** — set a timer/alarm on the Show, confirm it rings.
-- [ ] **Spotify end-to-end** — fetch librespot binary, one-time browser login,
-      "play some lofi" → audio on the Show (see `docs/SPOTIFY.md`).
+- [ ] **Spotify end-to-end** — librespot 0.8.0 built from source + account linked (`spotify=Jarvis`); say "play some lofi" → audio on the Show (see `docs/SPOTIFY.md`).
+- [ ] **Govee lights end-to-end** — code done + 37 tests; say "turn on jaiden lights" (H617A) / "patrick lights" (H617C) / "the lights" (both). Strips must be on + Govee phone app closed.
+
+## Shipped 2026-09-07 (late-night run, commit `87b3f78`)
+
+- [x] Touch Y-flip kernel fix flashed + confirmed.
+- [x] Wi-Fi OWE crash fix (root cause: duplicate OWE network).
+- [x] Spotify: account linked, librespot built (4m43s from source), now-playing poller 429-backoff fix (Claude Code) — 435 tests green, backoff observed live.
+- [x] Govee brief 13: H617A + H617C BLE protocol verified on hardware (power + whole-strip color, 0x33/XOR frames on the 2b11 char), `server/govee.py` + `govee_control` voice tool (Codex), 472 tests green, committed + pushed.
 
 ## Next up (feature queue — one worker at a time)
 
 Briefs live in `docs/` with git history; a single worker implements one brief
 before the next is dispatched (see `docs/ops-playbook.md` in the operator skill).
 
-1. **Finish Spotify brief 12** — close the verify queue items above (binary,
-   login, first audio).
-2. **UI brief 10 — live data feeds** (scores / flights / news / stocks on the
+1. **Live verify round** (owner, ~15 min): Spotify audio, Govee voice, alarm audio, mic far-field.
+2. **Camera final push** — HAL-userspace log capture at boot; then the give-up call.
+3. **UI brief 10 — live data feeds** (scores / flights / news / stocks on the
    ambient display; greyed until data).
-3. **HARDWARE brief 7 — physical buttons** (mic button remap: end chat / privacy
+4. **HARDWARE brief 7 — physical buttons** (mic button remap: end chat / privacy
    deaf; camera-switch verify).
-4. **MEMORY brief 8 — Jarvis memory** (persistent context across sessions).
-5. **Mic far-field viability decision** — result of the far-field take gates
+5. **MEMORY brief 8 — Jarvis memory** (persistent context across sessions).
+6. **Mic far-field viability decision** — result of the far-field take gates
    wake-word design; if it fails, tap-to-talk is the primary input (already the
    design fallback).
+
+## On hold (owner decisions)
+- **PS5 / Bluetooth speaker out** — parked by owner 2026-09-06 ("leave the ps5
+  speaker idea for now"); revisit after the verify queue clears.
+- **Govee cloud API** (`GOVEE_API_KEY` in `.env`) — kept for future Wi-Fi Govee
+  devices; strips are BLE-only so BLE is the path.
 
 ## Done / retired lanes
 
