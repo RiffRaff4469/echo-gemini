@@ -303,3 +303,58 @@ html,body{
 .card-count{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-variant-numeric: tabular-nums; }
 .card-bar{ width:70%; height:6px; border-radius:3px; background:rgba(255,255,255,0.16); margin-top:18px; overflow:hidden; }
 .card-bar > i{ display:block; height:100%; background:var(--blue); }
+
+/* --- now playing (protocol v1.5) -----------------------------------------
+   Across the panel, not stacked. 960x480 is wide, and stacking left the
+   transport row either off the bottom edge or too small to hit; side by side
+   there is room for a 200 px cover AND buttons a thumb can find. */
+.np{
+  height:100%; display:flex; align-items:center; justify-content:center;
+  gap:36px; padding:0 48px; box-sizing:border-box;
+}
+.np-art{
+  width:216px; height:216px; flex:0 0 216px; border-radius:14px;
+  object-fit:cover; background:rgba(255,255,255,0.06);
+  box-shadow:0 12px 32px rgba(0,0,0,0.55);
+}
+.np-noart{ display:flex; align-items:center; justify-content:center; }
+.np-noart svg{ width:64px; height:64px; fill:rgba(255,255,255,0.22); }
+.np-meta{ flex:1 1 auto; min-width:0; }
+/* One line each, clipped rather than wrapped: a three-line track title pushes
+   the buttons off the panel, and the answer to "what is this" is spoken. */
+.np-title{
+  font-size:42px; font-weight:300; line-height:1.1;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.np-artist{
+  font-size:24px; color:#b9c2cf; margin-top:6px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.np-album{
+  font-size:17px; color:var(--ink-dim); margin-top:2px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.np .card-bar{ width:100%; margin-top:16px; }
+.np-times{
+  display:flex; justify-content:space-between;
+  font-size:14px; color:var(--ink-dim); margin-top:7px;
+  font-variant-numeric: tabular-nums;
+}
+.np-row{ display:flex; align-items:center; gap:22px; margin-top:16px; }
+/* 64 px minimum: pressed with a thumb, in the dark, by someone who is not
+   looking closely. */
+.np-btn{
+  width:64px; height:64px; border-radius:50%; border:0; padding:0;
+  background:rgba(255,255,255,0.09); color:inherit;
+  display:flex; align-items:center; justify-content:center;
+  -webkit-tap-highlight-color: transparent;
+}
+.np-btn:active{ background:rgba(255,255,255,0.2); }
+.np-btn.np-main{ width:76px; height:76px; background:rgba(255,255,255,0.16); }
+.np-btn svg{
+  width:28px; height:28px; fill:#e6ebf2;
+  /* So a press always lands on the button, never on the path inside it --
+     the delegated handler looks for the nearest [data-media] ancestor. */
+  pointer-events:none;
+}
+.np-btn.np-main svg{ width:34px; height:34px; }

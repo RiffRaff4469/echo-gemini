@@ -244,6 +244,8 @@ class FakeDevice:
         self.vision: P.Video | None = None
         self.reply_audio = bytearray()
         self.reply_chunks = 0
+        self.music_chunks = 0
+        self.music_bytes = 0
         self.displays = 0
         self.interrupts = 0
         self.frames_sent = 0
@@ -291,6 +293,7 @@ class FakeDevice:
                                 "camera": not self.args.shutter,
                                 "microphone": True,
                                 "display": "960x480",
+                                "music": True,
                             },
                         )
                     )
@@ -410,8 +413,27 @@ class FakeDevice:
             if self.reply_chunks % 25 == 1:
                 total = len(self.reply_audio) / (P.AUDIO_DOWN_RATE * 2)
                 say(f"<- audio    {len(frame.payload)} bytes ({total:.1f}s of reply so far)")
+        elif frame.channel is P.Channel.AUDIO_MUSIC:
+            # Counted, not collected. Music is a continuous stream and this
+            # harness runs for as long as somebody leaves it running; keeping
+            # it would be an unbounded buffer for no diagnostic value.
+            self.music_chunks += 1
+            self.music_bytes += len(frame.payload)
+            if self.music_chunks % 100 == 1:
+                total = self.music_bytes / (P.AUDIO_DOWN_RATE * 2)
+                say(f"<- music    {len(frame.payload)} bytes ({total:.1f}s played)")
         else:
             say(f"<- unexpected media on {frame.channel.name}")
+
+    async def send_media(self, action: str) -> None:
+        """Press a transport button, as the ambient page's now-playing row does."""
+        try:
+            parsed = P.MediaAction(action)
+        except ValueError:
+            say(f"unknown media action {action!r}")
+            return
+        say(f"-> media_control {parsed.value}")
+        await self.send(P.MediaControl(action=parsed))
 
     # --- alarms and timers -------------------------------------------------
 
@@ -597,6 +619,8 @@ class FakeDevice:
         say(f"post-answer windows       : {self.quiet_windows}")
         reply_s = len(self.reply_audio) / (P.AUDIO_DOWN_RATE * 2)
         say(f"model audio received      : {reply_s:.1f}s in {self.reply_chunks} chunks")
+        music_s = self.music_bytes / (P.AUDIO_DOWN_RATE * 2)
+        say(f"music received            : {music_s:.1f}s in {self.music_chunks} chunks")
         if self.reply_audio and self.args.save_reply:
             path = Path(self.args.save_reply)
             with wave.open(str(path), "wb") as wav:

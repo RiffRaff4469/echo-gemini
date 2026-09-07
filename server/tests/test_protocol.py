@@ -64,10 +64,34 @@ def test_v1_3_stay_still_parses() -> None:
     assert isinstance(P.decode('{"v":1,"t":"stay"}'), P.Stay)
 
 
-def test_the_minor_version_announces_tap_to_stop() -> None:
+def test_the_minor_version_announces_music() -> None:
     """Both ends log the skew off this, and ``Protocol.kt`` hand-mirrors it."""
-    assert P.PROTOCOL_MINOR == 4
-    assert P.Hello(device_id="d").fields()["protocol_minor"] == 4
+    assert P.PROTOCOL_MINOR == 5
+    assert P.Hello(device_id="d").fields()["protocol_minor"] == 5
+
+
+def test_music_has_its_own_channel() -> None:
+    """Not a detail: music on ``AUDIO_DOWN`` would drive the device's speaking
+    state, which closes the mic uplink -- no wake word for as long as an album
+    played. See the note beside ``Channel.AUDIO_MUSIC``."""
+    assert P.Channel.AUDIO_MUSIC == 0x04
+    assert P.Channel.AUDIO_MUSIC is not P.Channel.AUDIO_DOWN
+    frame = P.MediaFrame(channel=P.Channel.AUDIO_MUSIC, payload=b"\x01\x02", seq=7)
+    decoded = P.MediaFrame.decode(frame.encode())
+    assert decoded.channel is P.Channel.AUDIO_MUSIC
+    assert decoded.payload == b"\x01\x02"
+
+
+def test_media_control_round_trip() -> None:
+    for action in P.MediaAction:
+        decoded = P.decode(P.MediaControl(action=action).encode())
+        assert isinstance(decoded, P.MediaControl)
+        assert decoded.action is action
+
+
+def test_media_control_rejects_an_unknown_action() -> None:
+    with pytest.raises(P.ProtocolError):
+        P.decode('{"v":1,"t":"media_control","action":"eject"}')
 
 
 def test_display_message_round_trip() -> None:

@@ -7,6 +7,9 @@
 *.pem
 local.properties
 secrets/
+# Spotify OAuth refresh token and librespot's credential cache. The refresh
+# token is, in practice, permanent -- it IS the account.
+server/spotify_creds/
 
 # ===== Python =====
 __pycache__/
@@ -34,3 +37,7 @@ Thumbs.db
 *.log
 server/data/
 server/recordings/
+# The librespot binary is fetched per-machine, not committed (~15 MB, and the
+# Windows build is not the one a Linux checkout wants).
+tools/librespot*
+

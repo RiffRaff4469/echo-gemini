@@ -32,11 +32,13 @@ import org.json.JSONObject
  *
  * ## The bridge, and what is deliberately not on it
  *
- * JS can call exactly four things: [tap], [openAlarm], [openTimer] and [log].
- * There is no shell, no file access, no link handle and no way to
- * send an arbitrary control message. Server-pushed `html` cards are rendered
- * by the page inside a sandboxed iframe with no `allow-same-origin`, so a
- * pushed `<script>` gets an opaque origin and cannot see this object at all.
+ * JS can call exactly five things: [tap], [openAlarm], [openTimer], [media] and
+ * [log]. There is no shell, no file access, no link handle and no way to
+ * send an arbitrary control message -- [media] takes one of five fixed action
+ * words and anything else is dropped here rather than forwarded. Server-pushed
+ * `html` cards are rendered by the page inside a sandboxed iframe with no
+ * `allow-same-origin`, so a pushed `<script>` gets an opaque origin and cannot
+ * see this object at all.
  *
  * ## Failing back
  *
@@ -62,6 +64,9 @@ class AmbientWeb private constructor(
         fun onTap()
         fun onOpenAlarm()
         fun onOpenTimer()
+
+        /** A transport button on the now-playing card (protocol v1.5). */
+        fun onMedia(action: Protocol.MediaAction)
 
         /** The WebView is unusable; fall back to the Canvas ambient. */
         fun onWebViewFailed(reason: String)
@@ -240,6 +245,22 @@ class AmbientWeb private constructor(
 
         @JavascriptInterface
         fun openTimer() = handler.post { callbacks.onOpenTimer() }
+
+        /**
+         * The page's transport row. Validated to one of the five known actions
+         * here rather than trusted: the bridge must not become a way to put an
+         * arbitrary string on the wire, and an unrecognised word is a bug in
+         * the asset, not something to forward and let the server puzzle over.
+         */
+        @JavascriptInterface
+        fun media(action: String) {
+            val parsed = Protocol.MediaAction.from(action)
+            if (parsed == null) {
+                Log.w(TAG, "ambient js asked for unknown media action: ${action.take(40)}")
+                return
+            }
+            handler.post { callbacks.onMedia(parsed) }
+        }
 
         /** The page's only way to say anything; it lands in logcat, nowhere else. */
         @JavascriptInterface
