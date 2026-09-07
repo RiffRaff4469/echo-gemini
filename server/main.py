@@ -183,6 +183,11 @@ class Hub:
         self.cfg = cfg
         self.link: DeviceLink | None = None
         self.started_at = time.time()
+        # Privacy mute mirror (v1.6): the DEVICE owns the real gate (audio
+        # never leaves it); this flag mirrors it so the wake path here cannot
+        # act on audio the device already stopped sending. Synced from the
+        # device's hello caps (it persists mute across reboots).
+        self.muted = False
 
         self.wake = WakeWordEngine(
             build_detector(
@@ -361,12 +366,19 @@ class Hub:
         elif isinstance(msg, P.Ping):
             link.send_msg(P.Pong(nonce=msg.nonce))
         elif isinstance(msg, P.Tap):
-            await self._on_tap(msg)
+            # v1.6 (HARDWARE-BRIEF-7 v2): screen taps no longer start or stop
+            # conversations -- the screen is for UI only. The wake word and the
+            # physical mic button are the session triggers now. The message
+            # stays decode-compatible for old clients but is a no-op.
+            if msg.pressed:
+                log.info("tap ignored: screen taps are UI-only since v1.6")
         elif isinstance(msg, (P.Stop, P.Stay)):
             # ``stay`` is v1.3's opposite intent, kept in the parser for a
             # device that has not been reflashed. Owner semantics supersede it:
             # a tap during a session ends the session either way.
             await self._on_stop()
+        elif isinstance(msg, P.Button):
+            await self._on_button(msg)
         elif isinstance(msg, P.MediaControl):
             await self._on_media_control(link, msg)
         elif isinstance(msg, P.CameraStatusMsg):
@@ -427,6 +439,10 @@ class Hub:
                 P.PROTOCOL_MINOR,
             )
 
+        # Mute is device-owned and persists across reboots; a device that
+        # boots muted announces it in caps so the server mirror starts right.
+        self.muted = bool(msg.capabilities.get("muted", False))
+
         log.info(
             "device %s (app %s, protocol v%d.%d) connected from %s; caps=%s",
             msg.device_id,
@@ -459,14 +475,57 @@ class Hub:
     async def _on_tap(self, msg: P.Tap) -> None:
         if not msg.pressed:
             return
-        # Tap-to-talk is a permanent manual override, not a shim (HANDOFF 1).
-        # It works even with wake word disabled or the model unreachable.
-        log.info("tap-to-talk")
-        if self.session.active:
-            self.session.touch()
+        # Retired in v1.6 (HARDWARE-BRIEF-7 v2): screen taps are UI-only.
+        log.info("tap ignored: screen taps are UI-only since v1.6")
+
+    async def _on_button(self, msg: P.Button) -> None:
+        """Physical mic button (v1.6). The device timed the press and sent the
+        semantic action; the server only reacts to it."""
+        if msg.action == "mute":
+            # The device already flipped its local gate; mirror the flip here
+            # so the server's wake path matches the device's deaf state.
+            await self._apply_mute(not self.muted)
             return
+        # talk_toggle
+        if self.muted:
+            # A short press unmutes AND talks (owner default (a)); the device
+            # dropped its gate before sending this, so clear the mirror.
+            log.info("mic button: unmuting to talk")
+            self.muted = False
+        if self.session.active:
+            log.info("mic button: ending the conversation")
+            await self._on_stop()
+            return
+        log.info("mic button: talk")
         await self.set_state(UiState.LISTENING)
-        await self.session.start("tap")
+        await self.session.start("button")
+
+    async def _apply_mute(self, on: bool) -> None:
+        """Server-side mirror of the device-owned privacy mute.
+
+        The device applies the real gate (no audio leaves it). This mirror
+        drops any audio that still arrives and is what ``set_mute`` toggles
+        for the voice path ("Jarvis, go mute").
+        """
+        if self.muted == on:
+            return
+        self.muted = on
+        log.info("privacy mute %s (server mirror)", "ON" if on else "off")
+
+    async def set_mute(self, on: bool) -> dict[str, Any]:
+        """Voice tool (``set_mute``): mute or unmute by request. Pushes the
+        desired state to the device, which owns the gate + LED + chip."""
+        await self._apply_mute(on)
+        if self.connected and self.link is not None:
+            self.link.send_msg(P.Mute(on=on))
+        return {
+            "confirmation": (
+                "Muted -- the wake word is off and no audio leaves the "
+                "display. Press and hold the mic button to unmute."
+                if on
+                else "Unmuted."
+            )
+        }
 
     async def _on_stop(self) -> None:
         """A tap while a session is already up: end it now (protocol v1.4).
@@ -588,6 +647,11 @@ class Hub:
             )
 
     async def _on_mic_audio(self, pcm: bytes) -> None:
+        if self.muted:
+            # Privacy mute mirror: the device's own gate should already have
+            # stopped this stream; if anything still arrives, drop it here so
+            # neither the detector nor a session can hear it.
+            return
         if self._recorder is not None:
             self._recorder.write(pcm)
 

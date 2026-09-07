@@ -66,8 +66,21 @@ def test_v1_3_stay_still_parses() -> None:
 
 def test_the_minor_version_announces_music() -> None:
     """Both ends log the skew off this, and ``Protocol.kt`` hand-mirrors it."""
-    assert P.PROTOCOL_MINOR == 5
-    assert P.Hello(device_id="d").fields()["protocol_minor"] == 5
+    assert P.PROTOCOL_MINOR == 6
+    assert P.Hello(device_id="d").fields()["protocol_minor"] == 6
+
+
+def test_button_and_mute_messages_round_trip() -> None:
+    """v1.6 (HARDWARE-BRIEF-7 v2): the device-classified mic button actions and
+    the server-initiated mute envelope survive the wire format."""
+    btn = P.decode('{"v":1,"t":"button","action":"talk_toggle"}')
+    assert isinstance(btn, P.Button) and btn.action == "talk_toggle"
+    btn_mute = P.decode('{"v":1,"t":"button","action":"mute"}')
+    assert isinstance(btn_mute, P.Button) and btn_mute.action == "mute"
+    mute = P.decode('{"v":1,"t":"mute","on":true}')
+    assert isinstance(mute, P.Mute) and mute.on is True
+    mute_off = P.decode('{"v":1,"t":"mute","on":false}')
+    assert isinstance(mute_off, P.Mute) and mute_off.on is False
 
 
 def test_music_has_its_own_channel() -> None:

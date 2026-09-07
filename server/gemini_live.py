@@ -353,6 +353,27 @@ def _build_tools(cfg: Config) -> list[Any]:
     declarations: list[Any] = list(_alarm_declarations())
 
     declarations.append(types.FunctionDeclaration(
+        name="set_mute",
+        description=(
+            "Mute or unmute the device by voice (privacy mute). When muted the "
+            "wake word is off and no audio leaves the device; a muted screen "
+            "shows a MUTED chip. The physical mic button (hold) does the same. "
+            "The user must unmute by voice, by holding the mic button, or by a "
+            "short press that unmutes and starts talking."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "on": types.Schema(
+                    type=types.Type.BOOLEAN,
+                    description="True to mute, false to unmute.",
+                )
+            },
+            required=["on"],
+        ),
+    ))
+
+    declarations.append(types.FunctionDeclaration(
         name="remember",
         description=(
             "Store a durable fact the user just told you that will matter in "
@@ -1059,6 +1080,16 @@ class LiveSessionManager:
                 return await handler(**dict(call.args or {}))
             except Exception as exc:
                 log.exception("Govee voice tool failed")
+                return {"error": str(exc)}
+        if call.name == "set_mute":
+            handler = getattr(self.sink, "set_mute", None)
+            if handler is None:
+                return {"error": "mute is not available"}
+            try:
+                args = dict(call.args or {})
+                return await handler(bool(args.get("on", False)))
+            except Exception as exc:
+                log.exception("mute tool failed")
                 return {"error": str(exc)}
         if call.name == "remember":
             handler = getattr(self.sink, "remember", None)

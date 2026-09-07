@@ -222,10 +222,13 @@ async def handled(device: FakeDevice, nonce: int = 1) -> None:
 
 
 async def test_a_tap_with_nothing_running_opens_a_session(client: TestClient) -> None:
+    # v1.6 (HARDWARE-BRIEF-7 v2): screen taps are UI-only -- they no longer
+    # start or stop conversations. The wake word and the physical mic button
+    # (button talk_toggle) are the triggers.
     device, session = await tap_device(client, session_active=False)
     await device.ws.send_str(P.Tap().encode())
     await handled(device)
-    assert session.starts == ["tap"], "tap-to-talk is unchanged by FIX-BRIEF-11"
+    assert session.starts == [], "v1.6: an idle tap must NOT open a session"
     assert session.stops == []
 
 
@@ -453,13 +456,13 @@ async def test_mic_audio_without_a_session_is_absorbed_by_the_wake_engine(
 
 
 async def test_tap_without_a_key_still_drives_ui_state(client: TestClient) -> None:
-    """Tap-to-talk is a permanent override. With Live disabled it must not
-    raise -- it should light up and fall back to idle."""
+    """v1.6: an idle tap no longer opens a session -- it is ignored entirely.
+    The device stays idle and the link stays open."""
     device = await FakeDevice.connect(client)
     await device.ws.send_str(P.Tap(pressed=True).encode())
-    assert (await device.expect(P.StateMsg)).state is P.UiState.LISTENING
-    assert (await device.expect(P.StateMsg)).state is P.UiState.IDLE
+    # No state messages should arrive: nothing opened, nothing closed.
     assert not device.ws.closed
+    assert (await device.expect(P.AlarmCommand))  # the connect-time list request
 
 
 # --- alarms over the real socket --------------------------------------------
