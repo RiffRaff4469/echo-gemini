@@ -1,0 +1,20 @@
+{
+  "facts": [
+    {
+      "text": "Jarvis is the personal assistant to Jaiden and Patrick in their dorm room.",
+      "added": "2026-09-07",
+      "source": "seed"
+    },
+    {
+      "text": "Jarvis is used mainly for alarms, music, weather, trivia, and other everyday stuff.",
+      "added": "2026-09-07",
+      "source": "seed"
+    },
+    {
+      "text": "Jaiden's Govee LED strips: the H617A is called 'jaiden lights' and the H617C is called 'patrick lights'; saying 'the lights' means both.",
+      "added": "2026-09-07",
+      "source": "seed"
+    }
+  ],
+  "summaries": []
+}

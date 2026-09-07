@@ -44,6 +44,7 @@ from protocol import (  # noqa: E402
     UiState,
 )
 from govee import GoveeHub
+from memory import get_store
 from spotify import (  # noqa: E402
     ALARM_HOLD,
     ALARM_HOLD_MAX_S,
@@ -211,6 +212,7 @@ class Hub:
             else None
         )
         self.govee = GoveeHub(cfg.govee_devices) if cfg.govee_enabled else None
+        self.memory = get_store()
         self.session = LiveSessionManager(cfg, self)
         # Decoration for the home screen, on its own background task. Nothing
         # in the voice path awaits it, and a failed fetch is logged and dropped
@@ -224,6 +226,15 @@ class Hub:
         self._recorder: Any = None
         if cfg.record_audio_dir:
             self._recorder = _AudioRecorder(Path(cfg.record_audio_dir))
+
+    async def remember(self, fact: str) -> dict[str, Any]:
+        """Store a durable fact from the model (MEMORY-BRIEF-8)."""
+        confirmation = self.memory.add_fact(fact, source="session")
+        return {"confirmation": confirmation, "stored": fact}
+
+    async def forget_memory(self, needle: str) -> dict[str, Any]:
+        """Owner/admin cleanup: drop facts mentioning ``needle``."""
+        return {"confirmation": self.memory.forget(needle)}
 
     async def govee_control(
         self, action: str, red: int | None = None, green: int | None = None,

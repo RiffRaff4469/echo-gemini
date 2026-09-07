@@ -41,3 +41,4 @@ server/recordings/
 # Windows build is not the one a Linux checkout wants).
 tools/librespot*
 
+server/memory/jarvis.json

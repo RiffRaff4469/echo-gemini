@@ -352,6 +352,28 @@ def _build_tools(cfg: Config) -> list[Any]:
 
     declarations: list[Any] = list(_alarm_declarations())
 
+    declarations.append(types.FunctionDeclaration(
+        name="remember",
+        description=(
+            "Store a durable fact the user just told you that will matter in "
+            "future conversations: names, preferences, recurring things about "
+            "Jaiden, Patrick, or the room ('my name is...', 'I prefer...', "
+            "'remember I have class on...'). Call this when the user states "
+            "something about themselves or the household worth keeping. Do not "
+            "store one-off requests or trivia questions."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "fact": types.Schema(
+                    type=types.Type.STRING,
+                    description="The fact, phrased as a complete declarative sentence.",
+                )
+            },
+            required=["fact"],
+        ),
+    ))
+
     if cfg.govee_enabled:
         declarations.append(types.FunctionDeclaration(
             name="govee_control",
@@ -432,6 +454,15 @@ def _system_instruction(cfg: Config) -> str:
             "while you are being spoken to and comes back when the "
             "conversation ends, so there is no need to pause it yourself first."
         )
+    # Long-term memory (MEMORY-BRIEF-8): facts the owner told us in earlier
+    # sessions. Imported lazily so a store failure never blocks session start.
+    try:
+        from memory import get_store  # noqa: PLC0415 - module-level store singleton
+        block = get_store().compose_block()
+    except Exception:  # pragma: no cover - defensive only
+        block = ""
+    if block:
+        text += "\n\n" + block
     return text
 
 
@@ -1028,6 +1059,16 @@ class LiveSessionManager:
                 return await handler(**dict(call.args or {}))
             except Exception as exc:
                 log.exception("Govee voice tool failed")
+                return {"error": str(exc)}
+        if call.name == "remember":
+            handler = getattr(self.sink, "remember", None)
+            if handler is None:
+                return {"error": "memory is not available"}
+            try:
+                args = dict(call.args or {})
+                return await handler(args.get("fact", ""))
+            except Exception as exc:
+                log.exception("memory tool failed")
                 return {"error": str(exc)}
         if call.name in _SPOTIFY_TOOLS:
             return await self._run_spotify_tool(call.name, dict(call.args or {}))
