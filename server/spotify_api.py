@@ -38,7 +38,17 @@ SEARCH_TYPES = ("track", "album", "artist", "playlist")
 
 
 class SpotifyApiError(RuntimeError):
-    """A failure the model should say out loud, phrased for a person."""
+    """A failure the model should say out loud, phrased for a person.
+
+    ``status`` is carried alongside the sentence because one caller needs to
+    tell the failures apart rather than just say them: the now-playing poller
+    backs off on a 429 and only on a 429. Zero means "not an HTTP status" --
+    a timeout, a DNS failure, a refresh that never got a response.
+    """
+
+    def __init__(self, message: str, *, status: int = 0) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class SpotifyNotLinked(SpotifyApiError):
@@ -151,11 +161,15 @@ class WebApi:
                 # "what is playing" when nothing is.
                 if resp.status == 204 or not (await resp.read()):
                     if resp.status >= 400:
-                        raise SpotifyApiError(_describe(resp.status, {}))
+                        raise SpotifyApiError(
+                            _describe(resp.status, {}), status=resp.status
+                        )
                     return None
                 body = await resp.json(content_type=None)
                 if resp.status >= 400:
-                    raise SpotifyApiError(_describe(resp.status, body))
+                    raise SpotifyApiError(
+                        _describe(resp.status, body), status=resp.status
+                    )
                 return body
         except asyncio.TimeoutError as exc:
             raise SpotifyApiError("Spotify did not answer in time.") from exc

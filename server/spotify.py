@@ -77,6 +77,21 @@ RESTART_BACKOFF_S = (1.0, 2.0, 5.0, 15.0, 30.0)
 ART_CACHE_MAX = 16
 ART_TARGET_EDGE = 300  # the card renders it at ~200 px on a 960x480 panel
 
+# The ceiling on the now-playing poll while Spotify is rate-limiting us. A 429
+# is the one failure that polling harder makes worse, so the interval doubles
+# per 429 and stops here: two minutes is stale, but it is a card, and the
+# alternative is an account-wide throttle that breaks the controls too.
+POLL_BACKOFF_MAX_S = 120.0
+
+# The floor on the poll when nothing is playing. The card is not on screen and
+# the progress bar is not moving, so asking every five seconds spends a
+# request-per-second budget on an answer that cannot have changed usefully.
+POLL_IDLE_S = 30.0
+
+# How often the rate-limit warning may repeat. Without this a throttled hour
+# writes six hundred identical lines and buries whatever else went wrong.
+RATE_LIMIT_LOG_S = 60.0
+
 # How long an explicit control overrides what the player state reports.
 # Spotify's ``GET /me/player`` lags a pause or a resume by a beat, so the read
 # that immediately follows a control can still describe the state we just
@@ -572,6 +587,10 @@ class SpotifyController:
         )
 
         self._poll_task: asyncio.Task | None = None
+        self._poll_base_s = max(1.0, float(cfg.spotify_poll_s))
+        self._poll_interval = self._poll_base_s
+        self._rate_limited = False
+        self._rate_limit_logged_at = float("-inf")
         self._holds: dict[str, _Hold] = {}
         self._resume_on_release = False
         self._arbitration_lock = asyncio.Lock()
@@ -931,10 +950,9 @@ class SpotifyController:
     # --- now playing ------------------------------------------------------
 
     async def _poll_loop(self) -> None:
-        interval = max(1.0, float(self.cfg.spotify_poll_s))
         while True:
             try:
-                await asyncio.sleep(interval)
+                await asyncio.sleep(self._poll_delay())
                 await self._expire_holds()
                 await self._refresh(retries=1, delay_s=0.0)
             except asyncio.CancelledError:
@@ -943,6 +961,52 @@ class SpotifyController:
                 log.info("now-playing poll failed: %s", exc)
             except Exception:
                 log.exception("now-playing poll crashed; continuing")
+
+    def _poll_delay(self) -> float:
+        """How long to wait before reading the player state again.
+
+        Three cadences in one number. Five seconds while a track is actually
+        moving, because the progress bar has to advance. A lazy
+        ``POLL_IDLE_S`` when nothing is playing, where the only thing being
+        watched for is playback starting somewhere else. And, above both, the
+        rate-limit backoff -- that one wins outright, because it is the case
+        where the polling itself is the problem.
+        """
+        if self._poll_interval > self._poll_base_s:
+            return self._poll_interval
+        if self.is_playing:
+            return self._poll_base_s
+        return max(self._poll_base_s, POLL_IDLE_S)
+
+    def _note_read_failed(self, exc: SpotifyApiError) -> None:
+        """Back off, but only for the failure that backing off actually fixes.
+
+        A timeout or a 5xx is Spotify having a moment; slowing the poll for one
+        makes the card stale over something that was never about how often we
+        asked. A 429 is the opposite -- it is caused by asking.
+        """
+        if getattr(exc, "status", 0) != 429:
+            log.info("could not read the Spotify player state: %s", exc)
+            return
+
+        self._poll_interval = min(self._poll_interval * 2.0, POLL_BACKOFF_MAX_S)
+        now = self._clock()
+        if not self._rate_limited or now - self._rate_limit_logged_at >= RATE_LIMIT_LOG_S:
+            log.warning(
+                "Spotify is rate-limiting this server; polling every %.0f s",
+                self._poll_interval,
+            )
+            self._rate_limit_logged_at = now
+        self._rate_limited = True
+
+    def _note_read_ok(self) -> None:
+        """A read got through, so whatever we backed off from is over."""
+        if self._rate_limited:
+            log.info(
+                "Spotify is answering again; polling every %.0f s", self._poll_base_s
+            )
+            self._rate_limited = False
+        self._poll_interval = self._poll_base_s
 
     async def _refresh(self, *, retries: int = 1, delay_s: float = 0.0) -> NowPlaying | None:
         """Read the player state and push a card if what it says has changed."""
@@ -955,8 +1019,9 @@ class SpotifyController:
             except SpotifyNotLinked:
                 return None
             except SpotifyApiError as exc:
-                log.info("could not read the Spotify player state: %s", exc)
+                self._note_read_failed(exc)
                 return self._now
+            self._note_read_ok()
             now = self._apply_intent(NowPlaying.from_state(state))
             if now is not None:
                 break

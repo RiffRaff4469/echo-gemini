@@ -22,6 +22,8 @@ from config import Config
 from protocol import DisplayType
 from spotify import (
     ALARM_HOLD,
+    POLL_BACKOFF_MAX_S,
+    POLL_IDLE_S,
     SESSION_HOLD,
     LibrespotSupervisor,
     NowPlaying,
@@ -357,6 +359,52 @@ async def test_playback_stopping_clears_the_card():
     api.state = None
     await controller._refresh()
     assert sink.clears == 1
+
+
+# --- poll cadence -----------------------------------------------------------
+
+
+async def test_a_timeout_does_not_slow_the_poll():
+    """Spotify missing one answer is a blip it recovers from on its own.
+    Backing off for it would make the card stale over a failure that was never
+    about how often we asked."""
+    controller, api, _ = build(state=playing_state())
+    await controller._refresh()
+    assert controller._poll_delay() == 5.0
+
+    api.fail_with = SpotifyApiError("Spotify did not answer in time.")
+    await controller._refresh()
+    assert controller._poll_delay() == 5.0
+
+
+async def test_a_429_backs_the_poll_off_until_spotify_answers_again():
+    """A rate limit is the one failure caused by the polling itself, so it is
+    the one that has to slow down -- and it must climb to a cap rather than
+    away, and come back to the base once reads get through."""
+    controller, api, _ = build(state=playing_state())
+    await controller._refresh()
+
+    api.fail_with = SpotifyApiError("rate-limited", status=429)
+    delays = []
+    for _ in range(8):
+        await controller._refresh()
+        delays.append(controller._poll_delay())
+
+    assert delays[:3] == [10.0, 20.0, 40.0]
+    assert delays[-1] == POLL_BACKOFF_MAX_S
+    assert max(delays) == POLL_BACKOFF_MAX_S, "backoff is not capped"
+
+    api.fail_with = None
+    await controller._refresh()
+    assert controller._poll_delay() == 5.0
+
+
+async def test_nothing_playing_polls_lazily():
+    """No card on screen and no bar to advance: five seconds is spending a
+    request budget on an answer that cannot have changed usefully."""
+    controller, _, _ = build(state=None)
+    await controller._refresh()
+    assert controller._poll_delay() == POLL_IDLE_S
 
 
 # --- audio ------------------------------------------------------------------
