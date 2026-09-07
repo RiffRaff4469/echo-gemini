@@ -32,8 +32,8 @@ import org.json.JSONObject
  *
  * ## The bridge, and what is deliberately not on it
  *
- * JS can call exactly five things: [tap], [stay], [openAlarm], [openTimer]
- * and [log]. There is no shell, no file access, no link handle and no way to
+ * JS can call exactly four things: [tap], [openAlarm], [openTimer] and [log].
+ * There is no shell, no file access, no link handle and no way to
  * send an arbitrary control message. Server-pushed `html` cards are rendered
  * by the page inside a sandboxed iframe with no `allow-same-origin`, so a
  * pushed `<script>` gets an opaque origin and cannot see this object at all.
@@ -54,8 +54,12 @@ class AmbientWeb private constructor(
 ) : FrameLayout(context) {
 
     interface Callbacks {
+        /**
+         * A touch anywhere the page did not claim. What it means -- open a
+         * session, or end the one on screen -- is decided by the host, not
+         * here: see `MainActivity.handleTap`.
+         */
         fun onTap()
-        fun onStay()
         fun onOpenAlarm()
         fun onOpenTimer()
 
@@ -197,6 +201,7 @@ class AmbientWeb private constructor(
         call("Echo.weather(${JSONObject.quote(json.toString())})")
     }
 
+    /** The post-answer countdown is running (or has stopped): show the hint. */
     fun quietWindow(active: Boolean) = call("Echo.quiet($active)")
 
     fun schedule(alarms: Int, timers: Int) = call("Echo.schedule($alarms, $timers)")
@@ -229,9 +234,6 @@ class AmbientWeb private constructor(
     private inner class Bridge {
         @JavascriptInterface
         fun tap() = handler.post { callbacks.onTap() }
-
-        @JavascriptInterface
-        fun stay() = handler.post { callbacks.onStay() }
 
         @JavascriptInterface
         fun openAlarm() = handler.post { callbacks.onOpenAlarm() }

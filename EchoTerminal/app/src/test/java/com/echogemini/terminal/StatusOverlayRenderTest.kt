@@ -68,7 +68,7 @@ class StatusOverlayRenderTest {
     }
 
     @Test
-    fun `the stay hint appears only once a window is armed`() {
+    fun `the stop hint appears only once a window is armed`() {
         val quiet = render { it.state = Protocol.UiState.LISTENING }
         val armed = render {
             it.state = Protocol.UiState.LISTENING

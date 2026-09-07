@@ -6,7 +6,7 @@
  *
  *   native -> JS   window.Echo.{linkState,uiState,weather,quiet,schedule,
  *                               display,displayClear,pageData}
- *   JS -> native   window.EchoNative.{tap,stay,openAlarm,openTimer,log}
+ *   JS -> native   window.EchoNative.{tap,openAlarm,openTimer,log}
  *
  * The JS side owns no state the app cannot rebuild: if the WebView is torn
  * down and reloaded, MainActivity replays the last link state, ui state,
@@ -21,7 +21,6 @@
   // the asset can be edited and previewed without an APK.
   var NATIVE = window.EchoNative || {
     tap: function () { console.log('tap'); },
-    stay: function () { console.log('stay'); },
     openAlarm: function () { console.log('openAlarm'); },
     openTimer: function () { console.log('openTimer'); },
     log: function (m) { console.log(m); }
@@ -421,18 +420,19 @@
   }
 
   // ----------------------------------------------------------------- taps
-  // A tap anywhere is tap-to-talk, exactly as it was when the ambient screen
-  // was a Canvas and MainActivity.onTouchEvent saw every touch. Page controls
-  // mark themselves data-ui and are excluded -- that is the "unless a page
-  // interaction consumed it" half of the rule.
+  // A tap anywhere goes to the host, exactly as it did when the ambient screen
+  // was a Canvas and MainActivity.onTouchEvent saw every touch. What it means
+  // -- open a session, or end the one on screen -- is decided there and not
+  // here. Page controls mark themselves data-ui and are excluded; that is the
+  // "unless a page interaction consumed it" half of the rule. The conversation
+  // hint is deliberately NOT one of them: it is a label, and tapping it is a
+  // tap like any other.
   document.addEventListener('click', function (e) {
     if (e.target.closest('[data-ui]')) return;
     NATIVE.tap();
   });
   $('alarm-chip').addEventListener('click', function () { NATIVE.openAlarm(); });
   $('timer-chip').addEventListener('click', function () { NATIVE.openTimer(); });
-  $('convo-hint').setAttribute('data-ui', '');
-  $('convo-hint').addEventListener('click', function () { NATIVE.stay(); });
 
   // ------------------------------------------------- native -> JS surface
   window.Echo = {
@@ -454,7 +454,7 @@
       }
     },
 
-    /** The post-answer quiet window (protocol v1.3), for the stay hint. */
+    /** The post-answer quiet window: shows the "tap to stop" hint. */
     quiet: function (active) {
       $('convo-hint').classList.toggle('hidden', !active);
     },

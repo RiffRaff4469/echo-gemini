@@ -251,7 +251,7 @@ class FakeDevice:
         self.alarm_commands = 0
         self.chimes = 0
         self.quiet_windows = 0
-        self.stays_left = int(getattr(args, "stay", 0) or 0)
+        self.stop_taps_left = int(getattr(args, "stop_tap", 0) or 0)
         self._camera_task: asyncio.Task | None = None
         self._alarm_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -384,19 +384,19 @@ class FakeDevice:
     async def _on_session_quiet(self, msg: P.SessionQuiet) -> None:
         """The answer is over and the server is counting down to the close.
 
-        On the real device this is what fades in the "tap to keep talking"
-        hint. Here it is also how ``--stay`` is driven, so the tap-to-stay path
-        can be smoke-tested without a touchscreen.
+        On the real device this is what fades in the "tap to stop" hint. Here
+        it is also how ``--stop-tap`` is driven, so the tap-to-stop path can be
+        smoke-tested without a touchscreen.
         """
         if not msg.active:
             say("<- session_quiet ended -- conversation continues")
             return
         self.quiet_windows += 1
         say(f"<- session_quiet -- closing in {msg.closes_in_s:g}s unless something happens")
-        if self.stays_left > 0:
-            self.stays_left -= 1
-            say("-> stay (tap to keep talking)")
-            await self.send(P.Stay())
+        if self.stop_taps_left > 0:
+            self.stop_taps_left -= 1
+            say("-> stop (tap to end the conversation)")
+            await self.send(P.Stop())
 
     def _on_binary(self, raw: bytes) -> None:
         try:
@@ -652,12 +652,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="start a local timer of N seconds at startup, as if set on-screen",
     )
     parser.add_argument(
-        "--stay",
+        "--stop-tap",
         type=int,
         default=0,
         help=(
-            "tap to keep talking N times: send a stay envelope each time the "
-            "server announces the post-answer quiet window"
+            "tap to end the conversation N times: send a stop envelope each "
+            "time the server announces the post-answer quiet window"
         ),
     )
     parser.add_argument("--save-reply", help="write the model's audio to this WAV")
