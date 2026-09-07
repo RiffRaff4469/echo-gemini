@@ -76,6 +76,20 @@ class StatusOverlay(context: Context) : View(context) {
         }
 
     /**
+     * Privacy mute (HARDWARE-BRIEF-7). While true the mic button has put the
+     * device deaf: no audio leaves it, the wake word cannot fire, and this
+     * band shows a persistent "MUTED" pill. Drawn in the state pill's slot --
+     * the mute can only be toggled while idle, so it never collides with a
+     * conversation state pill.
+     */
+    var micMuted: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
+    /**
      * Whether this band draws the conversation state pill and the stop hint.
      *
      * False when the WebView ambient is running (UI-BRIEF-9): the page draws
@@ -175,6 +189,8 @@ class StatusOverlay(context: Context) : View(context) {
             if (hintAlpha > 0f) drawStopHint(canvas, h)
         }
 
+        if (micMuted) drawMutedPill(canvas, h)
+
         when {
             cameraStreaming -> drawCameraPill(canvas, w, h)
             shutterClosed -> drawShutterPill(canvas, w, h)
@@ -194,7 +210,7 @@ class StatusOverlay(context: Context) : View(context) {
         hintPaint.color = Color.argb(
             (150 * hintAlpha).toInt().coerceIn(0, 255), 226, 233, 244
         )
-        canvas.drawText("tap to stop", statePillRight + h * 0.45f, h * 0.61f, hintPaint)
+        canvas.drawText("press mic to stop", statePillRight + h * 0.45f, h * 0.61f, hintPaint)
     }
 
     private fun drawState(canvas: Canvas, h: Float) {
@@ -263,6 +279,29 @@ class StatusOverlay(context: Context) : View(context) {
         pill.set(left, h * 0.15f, w - h * 0.3f, h * 0.85f)
         canvas.drawRoundRect(pill, h * 0.35f, h * 0.35f, pillPaint)
         canvas.drawText(label, left + h * 0.5f, h * 0.63f, camTextPaint)
+    }
+
+    /**
+     * The privacy-mute pill, in the state pill's slot (top-left). Muted is an
+     * idle-only state -- the button ends a conversation instead of muting --
+     * so this never shares the slot with a LISTENING/SPEAKING pill. Amber,
+     * deliberately: it is a warning about the device, not a state to feel
+     * good about.
+     */
+    private fun drawMutedPill(canvas: Canvas, h: Float) {
+        camTextPaint.textSize = h * 0.36f
+        val label = "MUTED"
+        val textWidth = camTextPaint.measureText(label)
+        val left = h * 0.30f
+        val pillWidth = textWidth + h * 1.1f
+
+        pillPaint.color = Color.parseColor("#B7791F")
+        pill.set(left, h * 0.15f, left + pillWidth, h * 0.85f)
+        canvas.drawRoundRect(pill, h * 0.35f, h * 0.35f, pillPaint)
+
+        dotPaint.color = Color.WHITE
+        canvas.drawCircle(left + h * 0.40f, h * 0.5f, h * 0.13f, dotPaint)
+        canvas.drawText(label, left + h * 0.66f, h * 0.63f, camTextPaint)
     }
 
     private companion object {

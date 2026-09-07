@@ -11,16 +11,20 @@ import android.graphics.drawable.GradientDrawable
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import java.util.concurrent.atomic.AtomicLong
 import android.widget.Toast
 import org.json.JSONObject
 import androidx.activity.ComponentActivity
@@ -73,6 +77,20 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     private lateinit var scheduleScreen: ScheduleScreen
     private lateinit var alarmTile: Button
     private lateinit var timerTile: Button
+
+    /** Main-thread handler for the button hold timer. */
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Device-owned mute persistence (HARDWARE-BRIEF-7 v2). */
+    private val prefs by lazy { getSharedPreferences("echo", MODE_PRIVATE) }
+
+    /** The mute LED once the discovery spike finds a node; null = chip only. */
+    private var led: MicLed? = null
+
+    /** Interface for the mute LED (work item 5); chip-only until implemented. */
+    interface MicLed {
+        fun setMuted(on: Boolean)
+    }
 
     /** The WebView ambient, or null once (or if ever) it failed. */
     private var web: AmbientWeb? = null
@@ -145,6 +163,12 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         startMusicPlayback()
         checkPermissions()
         startLink()
+
+        // Privacy mute is device-owned and persists across reboots (v2). The
+        // persisted state must be live before the link connects so the hello
+        // caps announce it, and before the mic starts so a muted boot never
+        // sends audio for even a moment.
+        applyPrivacyMute(prefs.getBoolean(PREF_MUTED, false))
     }
 
     /**
@@ -352,47 +376,124 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
     }
 
-    // --- tap to talk, tap to stop -------------------------------------------
+    // --- screen taps are UI-only (v1.6) ------------------------------------
 
     /**
-     * Tap anywhere. This is a permanent manual override, not a v1 shim (HANDOFF
-     * section 1): the microphone is weak enough that the wake word will
-     * sometimes miss, and there has to be a way to talk to the thing that does
-     * not depend on it hearing you first.
-     *
-     * One gesture, two meanings, and the difference is which one the user can
-     * already see on screen:
-     *
-     *  * nothing running -> `tap`, which OPENS a session (tap to talk).
-     *  * a conversation on screen -> `stop`, which ENDS it immediately
-     *    (protocol v1.4). Mid-answer is included, and deliberately so: a hand
-     *    going to the screen while it is talking means *enough*.
+     * v1.6 (HARDWARE-BRIEF-7 v2): screen taps no longer start or stop
+     * conversations -- the screen is for UI only (widgets, chips, pages).
+     * The wake word and the physical mic button are the session triggers.
+     * This hook stays so the Canvas fallback surface consumes the touch, and
+     * does nothing chat-related.
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return super.onTouchEvent(event)
-        handleTap()
+        Log.i(TAG, "tap ignored: screen taps are UI-only since v1.6")
         return true
     }
 
     /**
-     * The one implementation of the tap rule. In Canvas mode it is reached from
-     * [onTouchEvent]; in WebView mode the page's document click handler calls
-     * `EchoNative.tap()` and lands here instead, because a WebView consumes
-     * every touch before the activity sees it. Same rule either way, and the
-     * rule reads the same state either way.
+     * The WebView page's document click handler routes here via
+     * `EchoNative.tap()`. Same rule as [onTouchEvent]: UI-only, no chat.
      */
     private fun handleTap() {
+        Log.i(TAG, "tap ignored: screen taps are UI-only since v1.6")
+    }
+
+    // --- the physical mic button (HARDWARE-BRIEF-7 v2) ----------------------
+
+    /**
+     * The mic button arrives as the MICMUTE key once the device-side keylayout
+     * (`gating.kl`: key 116 MICMUTE) stops the stock LOS behaviour of treating
+     * it as the power key. (KEYCODE_MICMUTE == 277; the SDK constant is not
+     * exposed before API 35, so the numeric value is pinned here with the
+     * framework's own KeyEvent keycode 277.)
+     */
+    private val micButtonDownAt = AtomicLong(0L)
+
+    private val holdTask = object : Runnable {
+        override fun run() {
+            if (micButtonDownAt.get() == 0L) return  // released before the hold
+            Log.i(TAG, "mic button: HOLD -> mute toggle")
+            togglePrivacyMute()
+        }
+    }
+
+    private fun keycodeIsMicButton(keyCode: Int): Boolean =
+        keyCode == 277  // KEYCODE_MICMUTE; not exposed by the SDK before API 35
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!keycodeIsMicButton(event.keyCode)) return super.dispatchKeyEvent(event)
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                micButtonDownAt.set(event.eventTime)
+                handler.removeCallbacks(holdTask)
+                handler.postDelayed(holdTask, MIC_HOLD_MS)
+            }
+            KeyEvent.ACTION_UP -> {
+                val downAt = micButtonDownAt.getAndSet(0L)
+                handler.removeCallbacks(holdTask)
+                val heldMs = event.eventTime - downAt
+                when {
+                    // Short press, judged on release (< 700 ms): talk toggle.
+                    heldMs < MIC_SHORT_MS -> shortPress()
+                    // 700 ms-1 s: between the two meanings -- nothing. The
+                    // hold (>= 1 s) already fired at its own threshold while
+                    // still held; a release after that changes nothing.
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+        return true
+    }
+
+    /**
+     * Short press: talk toggle. Idle -> start a conversation; a conversation
+     * running -> end it; muted -> unmute AND start talking.
+     */
+    private fun shortPress() {
+        if (privacyMuted) {
+            Log.i(TAG, "mic button: short press while muted -> unmute + talk")
+            applyPrivacyMute(false)
+        }
         if (link?.state != Link.State.CONNECTED) {
-            Log.i(TAG, "tap ignored: link is ${link?.state}")
+            Log.i(TAG, "mic button ignored: link is ${link?.state}")
             return
         }
         if (statusBar.state != Protocol.UiState.IDLE) {
-            Log.i(TAG, "tap to stop")
-            link?.sendStop()
+            Log.i(TAG, "mic button: ending the conversation")
+            link?.sendButton("talk_toggle")
         } else {
-            Log.i(TAG, "tap to talk")
-            link?.sendTap()
+            Log.i(TAG, "mic button: talk")
+            link?.sendButton("talk_toggle")
         }
+    }
+
+    // --- privacy mute (device-owned) ---------------------------------------
+
+    /** True while the device is deaf: no audio leaves it, wake is off. */
+    var privacyMuted: Boolean = false
+        private set
+
+    /** Apply the privacy-mute transition locally; persists across reboots. */
+    private fun applyPrivacyMute(on: Boolean) {
+        if (privacyMuted == on) return
+        privacyMuted = on
+        capture?.muted = on
+        statusBar.micMuted = on
+        prefs.edit().putBoolean(PREF_MUTED, on).apply()
+        led?.setMuted(on)
+        Log.i(TAG, if (on) "privacy MUTE on" else "privacy mute off")
+    }
+
+    /** Hold (>= 1 s): flip the mute. Ends any active session first. */
+    private fun togglePrivacyMute() {
+        if (statusBar.state != Protocol.UiState.IDLE) {
+            // A hold while talking ends the session and mutes.
+            link?.sendStop()
+        }
+        applyPrivacyMute(!privacyMuted)
+        link?.sendButton("mute")
     }
 
     /** The alarms/timers entry point, from a native tile or a WebView chip. */
@@ -485,6 +586,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         if (capture == null) {
             val recorder = AudioCapture { pcm -> if (!scheduler.isRinging) link?.sendAudio(pcm) }
             capture = if (recorder.start()) {
+                // A device that booted muted starts deaf (HARDWARE-BRIEF-7 v2):
+                // the gate must be applied at creation, not just at toggle time.
+                recorder.muted = privacyMuted
                 recorder
             } else {
                 Log.e(TAG, "AudioRecord would not start; no uplink audio")
@@ -508,7 +612,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             sharedSecret = BuildConfig.SHARED_SECRET,
             deviceId = deviceId(),
             appVersion = BuildConfig.VERSION_NAME,
-            listener = this
+            listener = this,
+            mutedProvider = { privacyMuted }
         ).also { it.start() }
     }
 
@@ -582,6 +687,12 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                     statusBar.clearQuietWindow()
                     web?.quietWindow(false)
                 }
+            }
+
+            // v1.6: voice-initiated mute ("Jarvis, go mute"). The server asks
+            // for the full desired state; the device owns the gate.
+            Protocol.Type.MUTE -> runOnUiThread {
+                applyPrivacyMute(msg.bool("on", false))
             }
 
             // The model has finished answering and the server is counting down
@@ -754,5 +865,13 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     private companion object {
         const val TAG = "EchoTerminal"
+
+        /** Short-press threshold: under this (on release) = talk toggle. */
+        const val MIC_SHORT_MS = 700L
+
+        /** Hold threshold: at this (while still held) = mute toggle. */
+        const val MIC_HOLD_MS = 1_000L
+
+        const val PREF_MUTED = "privacy_muted"
     }
 }

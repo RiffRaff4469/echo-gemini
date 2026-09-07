@@ -76,6 +76,8 @@ object Protocol {
         const val PONG = "pong"
         const val TAP = "tap"
         const val STOP = "stop"
+        const val BUTTON = "button"  // v1.6
+        const val MUTE = "mute"  // v1.6, server -> device
         const val CAMERA_STATUS = "camera_status"
         const val DEVICE_LOG = "device_log"
         const val ERROR = "error"
@@ -164,6 +166,22 @@ object Protocol {
      * the screen mid-answer means *enough*; cutting the answer off is intended.
      */
     fun stop(): String = envelope(Type.STOP).toString()
+
+    /**
+     * Physical mic button, classified by duration (protocol v1.6,
+     * HARDWARE-BRIEF-7 v2). `talk_toggle` = short press (< 700 ms);
+     * `mute` = hold (>= 1 s). The server never times the button.
+     */
+    fun button(action: String): String =
+        envelope(Type.BUTTON).apply { put("action", action) }.toString()
+
+    /**
+     * Server-initiated mute (protocol v1.6): "Jarvis, go mute" reaches the
+     * device as the full desired state, never a toggle -- the device owns the
+     * mute and applies this transition to its local gate.
+     */
+    fun mute(on: Boolean): String =
+        envelope(Type.MUTE).apply { put("on", on) }.toString()
 
     /**
      * A transport button on the now-playing card (protocol v1.5).

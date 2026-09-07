@@ -47,6 +47,21 @@ class AudioCapture(private val sink: (ByteArray) -> Unit) {
     @Volatile
     var uplinkEnabled: Boolean = true
 
+    /**
+     * Privacy mute (HARDWARE-BRIEF-7). When true no audio leaves this device
+     * at all -- the frames are dropped before the VAD gate, so the server's
+     * wake-word detector hears silence and no session can start. This is a
+     * client-side deaf: stronger than asking the server to pause detection,
+     * because the audio never leaves the machine.
+     */
+    @Volatile
+    var muted: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            Log.i(TAG, if (value) "mic MUTED (privacy)" else "mic unmuted")
+        }
+
     /** Most recent frame RMS after gain -- surfaced for on-device level checks. */
     @Volatile
     var lastRms: Float = 0f
@@ -145,6 +160,14 @@ class AudioCapture(private val sink: (ByteArray) -> Unit) {
 
             val rms = applyGainAndMeasure(samples, read)
             lastRms = rms
+
+            if (muted) {
+                // Privacy mute: nothing leaves the device, and the hangover is
+                // reset so a word spoken just before the mute cannot keep the
+                // gate open into the muted period.
+                hangoverFramesLeft = 0
+                continue
+            }
 
             if (!uplinkEnabled) {
                 // Half-duplex. Drop the frame AND reset the hangover so the
