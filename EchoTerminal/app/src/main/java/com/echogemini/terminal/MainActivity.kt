@@ -328,7 +328,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
     }
 
-    // --- tap to talk --------------------------------------------------------
+    // --- tap to talk, tap to stop -------------------------------------------
 
     /**
      * Tap anywhere. This is a permanent manual override, not a v1 shim (HANDOFF
@@ -340,12 +340,9 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
      * already see on screen:
      *
      *  * nothing running -> `tap`, which OPENS a session (tap to talk).
-     *  * a conversation on screen -> `stay`, which HOLDS the one that is open
-     *    for another half minute (tap to keep talking, protocol v1.3).
-     *
-     * The server would treat a `tap` during a session as a plain keep-alive, so
-     * getting this wrong is not dangerous -- it would just mean the post-answer
-     * window closes on someone who was reaching for the screen to stop it.
+     *  * a conversation on screen -> `stop`, which ENDS it immediately
+     *    (protocol v1.4). Mid-answer is included, and deliberately so: a hand
+     *    going to the screen while it is talking means *enough*.
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return super.onTouchEvent(event)
@@ -354,7 +351,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     }
 
     /**
-     * The one implementation of tap-to-talk. In Canvas mode it is reached from
+     * The one implementation of the tap rule. In Canvas mode it is reached from
      * [onTouchEvent]; in WebView mode the page's document click handler calls
      * `EchoNative.tap()` and lands here instead, because a WebView consumes
      * every touch before the activity sees it. Same rule either way, and the
@@ -366,8 +363,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             return
         }
         if (statusBar.state != Protocol.UiState.IDLE) {
-            Log.i(TAG, "tap to keep talking")
-            link?.sendStay()
+            Log.i(TAG, "tap to stop")
+            link?.sendStop()
         } else {
             Log.i(TAG, "tap to talk")
             link?.sendTap()
@@ -384,13 +381,14 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     /**
      * What the ambient page is allowed to ask for. [AmbientWeb.Callbacks] is
      * the whole surface: three intents and a failure report.
+     *
+     * Note there is no separate "end the conversation" intent. Since v1.4 a tap
+     * is a tap wherever it lands, and [handleTap] is the single place that
+     * decides what it means -- the page must not be able to reach a second,
+     * divergent rule.
      */
     private val webCallbacks = object : AmbientWeb.Callbacks {
         override fun onTap() = handleTap()
-
-        override fun onStay() {
-            if (link?.state == Link.State.CONNECTED) link?.sendStay()
-        }
 
         override fun onOpenAlarm() = openSchedule("alarm")
         override fun onOpenTimer() = openSchedule("timer")
@@ -506,8 +504,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 web?.uiState(Protocol.UiState.IDLE)
                 statusBar.cameraStreaming = false
                 statusBar.shutterClosed = false
-                // No server, no session to keep talking to -- and no way to
-                // send the stay if the hint were tapped.
+                // No server, no session to end -- and no way to send the stop
+                // if the hint were tapped.
                 statusBar.clearQuietWindow()
                 web?.quietWindow(false)
                 capture?.uplinkEnabled = true

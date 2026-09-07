@@ -290,8 +290,11 @@ class Hub:
             link.send_msg(P.Pong(nonce=msg.nonce))
         elif isinstance(msg, P.Tap):
             await self._on_tap(msg)
-        elif isinstance(msg, P.Stay):
-            await self._on_stay()
+        elif isinstance(msg, (P.Stop, P.Stay)):
+            # ``stay`` is v1.3's opposite intent, kept in the parser for a
+            # device that has not been reflashed. Owner semantics supersede it:
+            # a tap during a session ends the session either way.
+            await self._on_stop()
         elif isinstance(msg, P.CameraStatusMsg):
             await self._on_camera_status(msg)
         elif isinstance(msg, P.AlarmStateMsg):
@@ -390,29 +393,30 @@ class Hub:
         await self.set_state(UiState.LISTENING)
         await self.session.start("tap")
 
-    async def _on_stay(self) -> None:
-        """A tap while a session is already up: keep talking (protocol v1.3).
+    async def _on_stop(self) -> None:
+        """A tap while a session is already up: end it now (protocol v1.4).
 
         Separate from ``tap``, which OPENS a session, so the two intents cannot
         be confused -- and so an older client that only sends ``tap`` keeps
-        behaving exactly as it did. The race is real and cheap to lose well: a
-        finger that lands the instant the quiet window expires arrives here with
-        the session already gone, and starting one is what the user meant
-        anyway.
+        behaving exactly as it did.
+
+        Cutting the model off mid-answer is the point rather than a hazard, so
+        this is ``stop`` and not a polite request to wind down. It is the same
+        graceful close the quiet window performs, though: ``stop`` sets the
+        session's stop event, the watchdog returns, and the session's own
+        teardown releases the camera, reopens the mic and puts the display back
+        to ambient. Nothing is killed, and the wake word re-arms by itself
+        because mic audio goes back to the detector once the session is gone.
+
+        A finger that lands in the same instant the session closes on its own
+        arrives here with nothing to stop, and that is a no-op -- under the new
+        semantics the user wanted it over, and it is over.
         """
         if not self.session.active:
-            log.info("tap-to-stay arrived after the close; opening a session instead")
-            await self.set_state(UiState.LISTENING)
-            await self.session.start("stay-after-close")
+            log.info("tap-to-stop with no session running; already back to ambient")
             return
-        if self.session.extend_stay():
-            left = self.session.quiet_seconds_left
-            log.info(
-                "tap-to-stay: %s",
-                f"{left:.0f}s before the session closes"
-                if left is not None
-                else "session held open",
-            )
+        log.info("tap-to-stop -- ending the conversation")
+        await self.session.stop("tap to stop")
 
     async def _on_alarm_fired(self, msg: P.AlarmFired) -> None:
         """The device is already ringing; this is only so Gemini can say so.

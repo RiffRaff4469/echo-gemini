@@ -30,9 +30,10 @@ object Protocol {
 
     const val VERSION = 1
     // v1.1 added alarms/timers and the now_playing card; v1.2 added `weather`,
-    // pushed by the server for the ambient home screen; v1.3 adds the
-    // post-answer quiet window (`session_quiet` down, `stay` up).
-    const val MINOR = 3
+    // pushed by the server for the ambient home screen; v1.3 added the
+    // post-answer quiet window (`session_quiet` down, `stay` up); v1.4 replaces
+    // `stay` with `stop` -- a tap during a session now ENDS it.
+    const val MINOR = 4
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
     // produces and consumes exactly these so the server never resamples.
@@ -59,7 +60,7 @@ object Protocol {
         const val HELLO = "hello"
         const val PONG = "pong"
         const val TAP = "tap"
-        const val STAY = "stay"
+        const val STOP = "stop"
         const val CAMERA_STATUS = "camera_status"
         const val DEVICE_LOG = "device_log"
         const val ERROR = "error"
@@ -136,15 +137,17 @@ object Protocol {
         envelope(Type.TAP).apply { put("pressed", pressed) }.toString()
 
     /**
-     * Tap-to-stay: keep the session that is already running (protocol v1.3).
+     * Tap-to-stop: end the session that is already running (protocol v1.4).
      *
      * Deliberately not a flag on [tap]. A tap that OPENS a session and a tap
-     * that HOLDS one are different intents, and this end is the only one that
+     * that ENDS one are opposite intents, and this end is the only one that
      * can tell them apart -- it can see whether the screen is currently showing
-     * a conversation. Carries no fields: how much longer a tap buys is the
-     * server's policy, so it can be retuned without reflashing the device.
+     * a conversation. Carries no fields: the only thing to say is "now".
+     *
+     * Replaces v1.3's `stay`, which bought another half minute. A hand going to
+     * the screen mid-answer means *enough*; cutting the answer off is intended.
      */
-    fun stay(): String = envelope(Type.STAY).toString()
+    fun stop(): String = envelope(Type.STOP).toString()
 
     fun cameraStatus(status: CameraStatus, detail: String = ""): String =
         envelope(Type.CAMERA_STATUS).apply {

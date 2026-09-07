@@ -38,10 +38,12 @@ PROTOCOL_VERSION = 1
 # channel (``alarm_command`` / ``alarm_state`` / ``alarm_fired``) and the
 # ``now_playing`` display card; v1.2 adds ``weather``, pushed for the ambient
 # home screen; v1.3 adds the post-answer quiet window (``session_quiet`` down,
-# ``stay`` up). A v1.0 peer stays compatible: it simply never sends or
-# understands the new types, and both sides ignore what they do not recognise.
-# ``hello`` and ``welcome`` announce it so each end can log the skew.
-PROTOCOL_MINOR = 3
+# ``stay`` up); v1.4 replaces ``stay`` with ``stop`` -- a tap during a session
+# now ENDS it rather than extending it (FIX-BRIEF-11). A v1.0 peer stays
+# compatible: it simply never sends or understands the new types, and both sides
+# ignore what they do not recognise. ``hello`` and ``welcome`` announce it so
+# each end can log the skew.
+PROTOCOL_MINOR = 4
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
@@ -84,7 +86,8 @@ class MsgType(str, Enum):
     HELLO = "hello"
     PONG = "pong"
     TAP = "tap"
-    STAY = "stay"  # v1.3
+    STOP = "stop"  # v1.4
+    STAY = "stay"  # v1.3, superseded by STOP -- decoded, then treated as one
     CAMERA_STATUS = "camera_status"
     DEVICE_LOG = "device_log"
     ERROR = "error"
@@ -446,15 +449,33 @@ class Tap(Message):
 
 
 @dataclass
-class Stay(Message):
-    """Tap-to-stay: keep the session that is already open (v1.3).
+class Stop(Message):
+    """Tap-to-stop: end the session that is already open (v1.4).
 
     Deliberately a separate type from ``tap`` rather than a flag on it. A tap
-    that OPENS a session and a tap that HOLDS one are different intents, and the
+    that OPENS a session and a tap that ENDS one are opposite intents, and the
     device is the only end that knows which it meant -- it can see whether the
-    screen is showing a conversation. Carries no fields: how much longer a tap
-    buys is the server's policy (``gemini_live.STAY_EXTENSION_S``), so it can be
-    retuned without reflashing the device.
+    screen is showing a conversation. Carries no fields: the only thing to say
+    is "now".
+
+    This replaces v1.3's ``stay``, which bought the session another half minute.
+    Using it made the owner's mental model plain: a hand going to the screen
+    mid-answer means *enough*, not *carry on*. Cutting an answer off is the
+    point, not a side effect.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.STOP
+
+    def fields(self) -> dict[str, Any]:
+        return {}
+
+
+@dataclass
+class Stay(Message):
+    """v1.3's tap-to-stay. Kept only so a device that has not been reflashed
+    still says something the server can act on -- see ``Hub._on_stop``, which
+    treats it exactly as ``stop``. Owner semantics supersede the old ones, so
+    an old client's tap ends the conversation rather than doing nothing.
     """
 
     TYPE: ClassVar[MsgType] = MsgType.STAY
@@ -860,6 +881,7 @@ for _cls in (
     Hello,
     Pong,
     Tap,
+    Stop,
     Stay,
     CameraStatusMsg,
     DeviceLog,
@@ -929,6 +951,8 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
         return Pong(nonce=int(data.get("nonce", 0)), ts=ts)
     if cls is Tap:
         return Tap(pressed=bool(data.get("pressed", True)), ts=ts)
+    if cls is Stop:
+        return Stop(ts=ts)
     if cls is Stay:
         return Stay(ts=ts)
     if cls is CameraStatusMsg:

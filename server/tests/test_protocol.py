@@ -23,6 +23,7 @@ import protocol as P
         P.Pong(nonce=7),
         P.Tap(pressed=True),
         P.Tap(pressed=False),
+        P.Stop(),
         P.Stay(),
         P.CameraStatusMsg(status=P.CameraStatus.SHUTTER_CLOSED, detail="near-black"),
         P.DeviceLog(level="warn", message="battery? there is none"),
@@ -54,6 +55,19 @@ def test_control_message_round_trip(msg: P.Message) -> None:
     decoded = P.decode(msg.encode())
     assert type(decoded) is type(msg)
     assert decoded.fields() == msg.fields()
+
+
+def test_v1_3_stay_still_parses() -> None:
+    """A device that has not been reflashed still says ``stay``. It has to
+    decode rather than raise -- ``Hub._on_stop`` is what gives it the new
+    meaning, and a parse error there would just log noise and do nothing."""
+    assert isinstance(P.decode('{"v":1,"t":"stay"}'), P.Stay)
+
+
+def test_the_minor_version_announces_tap_to_stop() -> None:
+    """Both ends log the skew off this, and ``Protocol.kt`` hand-mirrors it."""
+    assert P.PROTOCOL_MINOR == 4
+    assert P.Hello(device_id="d").fields()["protocol_minor"] == 4
 
 
 def test_display_message_round_trip() -> None:

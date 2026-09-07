@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import gemini_live
 from config import Config
 from gemini_live import LOOK_TOOL, STOP_LOOK_TOOL, LiveSessionManager
 from protocol import CameraStatus, UiState
@@ -337,50 +336,52 @@ async def test_speaking_inside_the_window_continues_the_conversation() -> None:
     await manager.stop("done")
 
 
-async def test_a_tap_holds_the_session_open_past_the_window(monkeypatch) -> None:
-    monkeypatch.setattr(gemini_live, "STAY_EXTENSION_S", 0.6)
-    manager, session, _sink = make_quiet_manager(window=0.15)
+async def test_nothing_extends_the_window_once_it_is_running() -> None:
+    """FIX-BRIEF-11 took the extension away: the only thing that survives a
+    running window is speaking again, which cancels it outright rather than
+    pushing the deadline. Pinned because the deadline arithmetic used to take a
+    max() over a tap-driven expiry, and a leftover of that would silently keep
+    billed sessions open."""
+    manager, session, _sink = make_quiet_manager(window=0.2)
     await manager.start("wake")
     await answer(session)
 
-    assert manager.extend_stay() is True
-    await asyncio.sleep(0.4)
-    assert manager.active, "a tap must buy more than the plain window"
-    await asyncio.sleep(0.5)
-    assert manager.active is False, "and the extension must itself expire"
+    assert not hasattr(manager, "extend_stay"), "tap-to-stay must be gone, not dormant"
+    await asyncio.sleep(0.6)
+    assert manager.active is False
 
 
-async def test_a_tap_during_the_answer_is_honoured_by_the_window_after_it(
-    monkeypatch,
-) -> None:
-    """Tapping while the model is still speaking is the natural gesture for
-    'stay with me' -- it must not be swallowed because no window is open yet."""
-    monkeypatch.setattr(gemini_live, "STAY_EXTENSION_S", 0.6)
-    manager, session, _sink = make_quiet_manager(window=0.15)
+async def test_a_tap_ends_the_session_mid_answer() -> None:
+    """The owner's change: a hand on the screen while the model is talking means
+    *enough*. Nothing else in the manager can close during an answer, so this is
+    the one path that has to."""
+    manager, session, sink = make_quiet_manager(window=5.0, session_idle_timeout_s=60.0)
     await manager.start("wake")
     session.emit_audio(b"\xaa\xbb" * 50)
     await settle(10)
-    assert manager.quiet_seconds_left is None, "no window while the model speaks"
-    manager.extend_stay()
+    assert manager.active, "precondition: an answer is in flight"
 
-    session.emit_content(turn_complete=True)
-    await settle(10)
-    await asyncio.sleep(0.35)
-    assert manager.active, "the tap made during the answer must still count"
-    await manager.stop("done")
+    await manager.stop("tap to stop")
+    assert manager.active is False, "a mid-answer tap must cut the answer off"
+    assert sink.states[-1] is UiState.IDLE, "and put the display back to ambient"
+    assert sink.mic[-1] is True, "with the mic reopened for the wake word"
 
 
-async def test_repeated_taps_are_debounced() -> None:
-    manager, _session, _sink = make_quiet_manager()
+async def test_a_tap_close_releases_the_camera() -> None:
+    """Same teardown as every other close (HANDOFF 8.3). The HAL1 camera must
+    not be left open because the session ended by hand instead of by timer."""
+    manager, session, sink = make_quiet_manager(window=5.0, vision_mode="always")
     await manager.start("wake")
-    assert manager.extend_stay() is True
-    assert manager.extend_stay() is False, "one finger, one extension"
-    await manager.stop("done")
+    await settle(10)
+    assert sink.vision[-1] is True, "precondition: vision was requested"
+
+    await manager.stop("tap to stop")
+    assert sink.vision[-1] is False
 
 
 async def test_the_device_is_told_when_the_window_opens_and_closes() -> None:
-    """The client fades in 'tap to keep talking' near the end of the window, so
-    it needs the deadline, not just the fact that a session exists."""
+    """The client fades in 'tap to stop' near the end of the window, so it needs
+    the deadline, not just the fact that a session exists."""
     manager, session, sink = make_quiet_manager(window=0.4)
     await manager.start("wake")
     await answer(session)

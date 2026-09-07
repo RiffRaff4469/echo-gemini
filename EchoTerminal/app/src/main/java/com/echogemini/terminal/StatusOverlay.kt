@@ -76,7 +76,7 @@ class StatusOverlay(context: Context) : View(context) {
         }
 
     /**
-     * Whether this band draws the conversation state pill and the stay hint.
+     * Whether this band draws the conversation state pill and the stop hint.
      *
      * False when the WebView ambient is running (UI-BRIEF-9): the page draws
      * its own conversation chrome, and two "LISTENING" labels on one screen is
@@ -106,12 +106,13 @@ class StatusOverlay(context: Context) : View(context) {
     //
     // The server closes the session a few seconds after the model finishes
     // answering (POST_ANSWER_SILENCE_S) so a quick question does not leave the
-    // microphone streaming while you walk away. That is the right default, but
-    // it has to be escapable: tapping anywhere buys another half minute. This
-    // is the only thing on screen that says so, and it is deliberately small,
-    // muted and late -- the ambient home screen owns the display, and a
-    // permanent "tap to keep talking" banner would be an advert for a feature
-    // nobody needs to see most of the time.
+    // microphone streaming while you walk away. This says so, and says what a
+    // touch does now that a tap during a session ENDS it (protocol v1.4): the
+    // conversation is winding down anyway, and tapping finishes it at once.
+    //
+    // Deliberately small, muted and late -- the ambient home screen owns the
+    // display, and a permanent "tap to stop" banner would be an advert for a
+    // gesture nobody needs reminding of most of the time.
 
     /** Elapsed-realtime deadline for the running window; 0 when none. */
     private var quietDeadlineMs = 0L
@@ -138,9 +139,9 @@ class StatusOverlay(context: Context) : View(context) {
     /**
      * Arm the hint against a window closing in [closesInMs].
      *
-     * Called again whenever the server moves the deadline -- a tap extends it,
-     * so the hint has to retreat rather than keep fading in over a session that
-     * is no longer about to end.
+     * Called again whenever the server moves the deadline -- speaking again
+     * cancels the window, so the hint has to retreat rather than keep fading in
+     * over a session that is no longer about to end.
      */
     fun setQuietWindow(closesInMs: Long) {
         handler.removeCallbacks(hintTick)
@@ -171,7 +172,7 @@ class StatusOverlay(context: Context) : View(context) {
 
         if (showConversation) {
             drawState(canvas, h)
-            if (hintAlpha > 0f) drawStayHint(canvas, h)
+            if (hintAlpha > 0f) drawStopHint(canvas, h)
         }
 
         when {
@@ -181,19 +182,19 @@ class StatusOverlay(context: Context) : View(context) {
     }
 
     /**
-     * "tap to keep talking", sitting just after the state pill.
+     * "tap to stop", sitting just after the state pill.
      *
      * Left of the camera indicator by construction: the state pill is anchored
      * to the left edge and the camera pill to the right, so the hint grows into
      * the gap between them and can never cover the one thing on this band that
      * is a product requirement.
      */
-    private fun drawStayHint(canvas: Canvas, h: Float) {
+    private fun drawStopHint(canvas: Canvas, h: Float) {
         hintPaint.textSize = h * 0.28f
         hintPaint.color = Color.argb(
             (150 * hintAlpha).toInt().coerceIn(0, 255), 226, 233, 244
         )
-        canvas.drawText("tap to keep talking", statePillRight + h * 0.45f, h * 0.61f, hintPaint)
+        canvas.drawText("tap to stop", statePillRight + h * 0.45f, h * 0.61f, hintPaint)
     }
 
     private fun drawState(canvas: Canvas, h: Float) {

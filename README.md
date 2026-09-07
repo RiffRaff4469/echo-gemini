@@ -237,6 +237,7 @@ Terminal 2 shows every push arriving on the device socket. Other useful flags:
 ```powershell
 python server\tools\fake_device.py --no-audio          # just hold the link
 python server\tools\fake_device.py --tap               # tap-to-talk
+python server\tools\fake_device.py --stop-tap 1        # tap-to-stop, once
 python server\tools\fake_device.py --shutter           # simulate the privacy latch
 python server\tools\fake_device.py --save-reply out.wav
 ```
@@ -440,6 +441,9 @@ Each of these is in the code for a reason that cost someone something to learn.
   time a session is open.
 - **Tap-to-talk is permanent.** The mic is weak enough that the wake word will
   sometimes miss.
+- **Tap during a conversation ends it.** One gesture, and which of the two it
+  means is whatever is already on screen. Mid-answer taps cut the answer off,
+  which is the point: a hand going to the panel means *enough*.
 - **Half-duplex on purpose.** Suppressing the uplink while the server speaks
   sidesteps acoustic echo cancellation on a device with one weak microphone.
 - **Voice and vision processing stay on the server.** The clock, alarms and

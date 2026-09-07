@@ -169,6 +169,94 @@ async def test_malformed_binary_frame_is_ignored_not_fatal(client: TestClient) -
     assert (await device.expect(P.Pong)).nonce == 5
 
 
+# --- tap dispatch -----------------------------------------------------------
+#
+# One gesture, two meanings, and the device picks which envelope to send from
+# what is on its own screen. What the hub does with each is pinned here because
+# FIX-BRIEF-11 inverted the second one: a tap during a session used to buy
+# another half minute and now ends the conversation on the spot.
+
+
+class StubSession:
+    """Stands in for ``LiveSessionManager`` -- these tests run with no API key,
+    and what is under test is the hub's dispatch, not the Live leg."""
+
+    def __init__(self, active: bool = False) -> None:
+        self.active = active
+        self.starts: list[str] = []
+        self.stops: list[str] = []
+        self.touches = 0
+        self.quiet_seconds_left: float | None = None
+        self.vision_on = False
+
+    async def start(self, reason: str) -> bool:
+        self.starts.append(reason)
+        self.active = True
+        return True
+
+    async def stop(self, reason: str) -> None:
+        self.stops.append(reason)
+        self.active = False
+
+    def touch(self) -> None:
+        self.touches += 1
+
+
+async def tap_device(
+    client: TestClient, *, session_active: bool
+) -> tuple[FakeDevice, StubSession]:
+    device = await FakeDevice.connect(client)
+    session = StubSession(active=session_active)
+    client.app[HUB_KEY].session = session
+    return device, session
+
+
+async def handled(device: FakeDevice, nonce: int = 1) -> None:
+    """Block until the hub has finished the message just sent.
+
+    The link reads one control message at a time, so a pong for a ping sent
+    afterwards cannot come back until the earlier handler has returned.
+    """
+    await device.ws.send_str(P.Ping(nonce=nonce).encode())
+    assert (await device.expect(P.Pong)).nonce == nonce
+
+
+async def test_a_tap_with_nothing_running_opens_a_session(client: TestClient) -> None:
+    device, session = await tap_device(client, session_active=False)
+    await device.ws.send_str(P.Tap().encode())
+    await handled(device)
+    assert session.starts == ["tap"], "tap-to-talk is unchanged by FIX-BRIEF-11"
+    assert session.stops == []
+
+
+async def test_a_stop_ends_the_running_session(client: TestClient) -> None:
+    device, session = await tap_device(client, session_active=True)
+    await device.ws.send_str(P.Stop().encode())
+    await handled(device)
+    assert session.stops, "a tap during a session must close it"
+    assert session.starts == [], "and must never open a replacement"
+
+
+async def test_a_stop_that_races_the_close_does_nothing(client: TestClient) -> None:
+    """A finger landing the instant the session closes on its own. Under v1.3
+    this opened a fresh one, because a tap then meant "keep going". It now means
+    "stop", and it already has."""
+    device, session = await tap_device(client, session_active=False)
+    await device.ws.send_str(P.Stop().encode())
+    await handled(device)
+    assert session.starts == []
+    assert session.stops == []
+
+
+async def test_an_old_clients_stay_is_treated_as_a_stop(client: TestClient) -> None:
+    """A device that has not been reflashed still speaks v1.3. Owner semantics
+    supersede the old ones rather than the tap being dropped on the floor."""
+    device, session = await tap_device(client, session_active=True)
+    await device.ws.send_str(P.Stay().encode())
+    await handled(device)
+    assert session.stops, "v1.3's stay must end the session, not extend it"
+
+
 # --- POST /display ----------------------------------------------------------
 
 

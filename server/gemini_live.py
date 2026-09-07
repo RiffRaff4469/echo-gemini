@@ -76,16 +76,6 @@ AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 _AUDIO_QUEUE_MAX = 200  # ~4 s of 20 ms frames
 _VIDEO_QUEUE_MAX = 3
 
-# One tap on the screen buys this much more conversation. Long enough to gather
-# a thought and ask the follow-up, short enough that a stray elbow does not bill
-# a minute of an empty room.
-STAY_EXTENSION_S = 30.0
-
-# Taps closer together than this are one tap. A finger on a panel that is also
-# showing a fade-in hint produces several ACTION_DOWNs, and each of those must
-# not silently buy another half minute.
-STAY_DEBOUNCE_S = 0.75
-
 
 class SessionSink(Protocol):
     """What a session needs to push back at the device. Implemented by ``Hub``."""
@@ -385,8 +375,6 @@ class LiveSessionManager:
         # no window is running, which is the case for all of a session that is
         # still mid-answer.
         self._quiet_since = 0.0
-        self._stay_until = 0.0
-        self._last_stay_at = 0.0
         self._announced_close_at = 0.0
 
     # --- state ------------------------------------------------------------
@@ -438,8 +426,6 @@ class LiveSessionManager:
         self._user_turn_open = False
         self._model_speaking = False
         self._quiet_since = 0.0
-        self._stay_until = 0.0
-        self._last_stay_at = 0.0
         self._announced_close_at = 0.0
         self._started_at = self._clock()
         self.touch()
@@ -497,13 +483,11 @@ class LiveSessionManager:
     def _closes_at(self) -> float:
         """When the running quiet window will end the session.
 
-        A tap pushes ``_stay_until`` out past the plain window, so the later of
-        the two is the real deadline -- one tap during a five-second window must
-        not be undone by the window's own arithmetic.
+        Nothing extends it any more: since FIX-BRIEF-11 a tap ends the session
+        outright, and speaking again cancels the window rather than moving its
+        deadline. The only way past this instant is to keep talking.
         """
-        return max(
-            self._quiet_since + self.cfg.post_answer_silence_s, self._stay_until
-        )
+        return self._quiet_since + self.cfg.post_answer_silence_s
 
     def _open_quiet_window(self) -> None:
         """The model just finished answering: start counting down to the close.
@@ -520,28 +504,8 @@ class LiveSessionManager:
             self._quiet_since = self._clock()
 
     def _cancel_quiet_window(self) -> None:
-        """The conversation continued. Forget the deadline entirely.
-
-        ``_stay_until`` survives on purpose: a tap made during an answer should
-        still be honoured by the window that opens when the answer ends.
-        """
+        """The conversation continued. Forget the deadline entirely."""
         self._quiet_since = 0.0
-
-    def extend_stay(self) -> bool:
-        """Tap-to-stay: hold this session open for another ``STAY_EXTENSION_S``.
-
-        Returns False for a bounced duplicate tap, so the caller can log one
-        extension rather than four. Also re-arms the idle timer -- a tap is a
-        person at the display, which is exactly what ``SESSION_IDLE_TIMEOUT``
-        is trying to detect the absence of.
-        """
-        now = self._clock()
-        if now - self._last_stay_at < STAY_DEBOUNCE_S:
-            return False
-        self._last_stay_at = now
-        self._stay_until = max(self._stay_until, now) + STAY_EXTENSION_S
-        self.touch()
-        return True
 
     async def _publish_quiet(self, now: float) -> None:
         """Keep the device's copy of the deadline in step with ours.
@@ -1020,11 +984,11 @@ class LiveSessionManager:
 
         * **The post-answer quiet window** (``POST_ANSWER_SILENCE_S``, ~8 s) is
           the one that matters day to day. It starts only when the model has
-          finished answering and ends the session unless the user speaks again
-          or taps the screen. A quick question therefore costs about ten
-          seconds of billed session, and -- just as importantly -- the mic
-          stops being streamed to the model straight afterwards, so the
-          conversation someone has next to the display is not sent anywhere.
+          finished answering and ends the session unless the user speaks again.
+          A quick question therefore costs about ten seconds of billed session,
+          and -- just as importantly -- the mic stops being streamed to the
+          model straight afterwards, so the conversation someone has next to
+          the display is not sent anywhere.
         * **``SESSION_IDLE_TIMEOUT``** (120 s) remains the backstop for a
           session that never gets an answer out of the model at all, and the
           only close when the quiet window is disabled.
@@ -1033,16 +997,18 @@ class LiveSessionManager:
           against a session that never ends, and at ten minutes an answer still
           running into it has already gone wrong.
 
-        Nothing else can cut an answer short. While ``_model_speaking`` is true
-        the idle clock is held open and no quiet window can exist, so a long
-        reply always completes.
+        Nothing in here can cut an answer short. While ``_model_speaking`` is
+        true the idle clock is held open and no quiet window can exist, so a
+        long reply always completes. The one thing that *can* is a tap on the
+        screen -- ``Hub._on_stop`` calls ``stop()`` directly, which is exactly
+        what the owner asked a mid-answer tap to do (FIX-BRIEF-11).
         """
         idle_limit = self.cfg.session_idle_timeout_s
         max_duration = self.cfg.session_max_duration_s
         quiet_limit = self.cfg.post_answer_silence_s
         # Check often enough that whichever limit is shortest is honoured
         # promptly, but not so often that an idle server spins. The quiet
-        # window is in the list because the device's "tap to keep talking" hint
+        # window is in the list because the device's end-of-conversation hint
         # is armed off this tick, and a late hint is a hint nobody can act on.
         limits = [x for x in (idle_limit, max_duration, quiet_limit) if x > 0]
         tick = min(1.0, max(0.05, min(limits) / 4)) if limits else 1.0
