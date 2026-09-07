@@ -37,6 +37,7 @@ def clean_env():
                 "POST_ANSWER_",
                 "MIC_",
                 "WEATHER_",
+                "SPOTIFY_",
             )
         ):
             del os.environ[name]
@@ -195,6 +196,109 @@ def test_too_frequent_weather_poll_is_clamped_not_fatal(tmp_path) -> None:
     assert any("WEATHER_POLL_S" in w for w in cfg.warnings)
 
 
+SECRET = "ECHO_SHARED_SECRET=a-long-enough-secret\n"
+
+
+def test_spotify_is_off_by_default(tmp_path) -> None:
+    """It needs Premium and a one-time browser login, so nothing about it may
+    happen on a server nobody has asked to play music."""
+    cfg = load_config(write_env(tmp_path, SECRET))
+    assert cfg.spotify_enabled is False
+    assert cfg.spotify_device_name == "Jarvis"
+    assert cfg.spotify_client_id, "the default is librespot's public client id"
+
+
+def test_spotify_paths_resolve_against_the_repo_root(tmp_path) -> None:
+    """A relative value in .env must mean the same thing whichever directory
+    the server was started from -- the service wrapper's is not the repo."""
+    cfg = load_config(write_env(tmp_path, SECRET))
+    assert Path(cfg.spotify_creds_dir).is_absolute()
+    assert Path(cfg.spotify_librespot_bin).is_absolute()
+    assert Path(cfg.spotify_librespot_bin).name == "librespot.exe"
+
+
+def test_a_missing_librespot_binary_warns_but_starts(tmp_path) -> None:
+    """The rest of the server -- alarms, weather, the whole voice path -- must
+    still come up on a machine where the binary was never fetched."""
+    cfg = load_config(
+        write_env(
+            tmp_path,
+            SECRET + "SPOTIFY_ENABLED=true\n"
+            f"SPOTIFY_LIBRESPOT_BIN={tmp_path / 'nope.exe'}\n",
+        )
+    )
+    assert cfg.spotify_enabled is True
+    assert any("no librespot binary" in w for w in cfg.warnings)
+
+
+def test_bad_spotify_bitrate_is_fatal(tmp_path) -> None:
+    """librespot accepts exactly three; anything else makes it exit at spawn,
+    which reads as "music silently never starts"."""
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            write_env(tmp_path, SECRET + "SPOTIFY_ENABLED=true\nSPOTIFY_BITRATE=256\n")
+        )
+    assert "SPOTIFY_BITRATE" in str(exc.value)
+
+
+def test_out_of_range_spotify_volume_is_fatal(tmp_path) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            write_env(
+                tmp_path, SECRET + "SPOTIFY_ENABLED=true\nSPOTIFY_INITIAL_VOLUME=140\n"
+            )
+        )
+    assert "SPOTIFY_INITIAL_VOLUME" in str(exc.value)
+
+
+def test_empty_spotify_device_name_is_fatal(tmp_path) -> None:
+    """The device is found by name, so a blank one makes every play call fail
+    with Spotify's least helpful 404."""
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            write_env(
+                tmp_path, SECRET + 'SPOTIFY_ENABLED=true\nSPOTIFY_DEVICE_NAME="  "\n'
+            )
+        )
+    assert "SPOTIFY_DEVICE_NAME" in str(exc.value)
+
+
+def test_too_frequent_spotify_poll_is_clamped_not_fatal(tmp_path) -> None:
+    """The poll only moves a progress bar on a bedside display; polling harder
+    counts against the account's rate limit and buys nothing."""
+    cfg = load_config(
+        write_env(tmp_path, SECRET + "SPOTIFY_ENABLED=true\nSPOTIFY_POLL_S=0.2\n")
+    )
+    assert cfg.spotify_poll_s == 1.0
+    assert any("SPOTIFY_POLL_S" in w for w in cfg.warnings)
+
+
+def test_spotify_validation_only_applies_when_it_is_enabled(tmp_path) -> None:
+    """A leftover value under a disabled feature must not stop the server."""
+    cfg = load_config(write_env(tmp_path, SECRET + "SPOTIFY_BITRATE=256\n"))
+    assert cfg.spotify_enabled is False
+
+
+def test_librespot_args_are_split_like_a_shell(tmp_path) -> None:
+    """The escape hatch for an upstream flag rename, so it has to survive
+    quoting the way the owner would type it."""
+    cfg = load_config(
+        write_env(
+            tmp_path,
+            SECRET + 'SPOTIFY_LIBRESPOT_ARGS=--device "My Speaker" --verbose\n',
+        )
+    )
+    assert cfg.spotify_extra_args == ["--device", "My Speaker", "--verbose"]
+
+
+def test_describe_never_prints_the_spotify_creds_path_contents(tmp_path) -> None:
+    """describe() goes to the log at every startup; the creds directory holds a
+    refresh token that is, in practice, permanent."""
+    cfg = load_config(write_env(tmp_path, SECRET + "SPOTIFY_ENABLED=true\n"))
+    assert "Jarvis" in cfg.describe()
+    assert cfg.spotify_creds_dir not in cfg.describe()
+
+
 def test_system_instruction_from_file(tmp_path, monkeypatch) -> None:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("You are a very terse clock.", encoding="utf-8")
@@ -252,6 +356,18 @@ def test_env_example_lists_every_documented_var() -> None:
         "WEATHER_POLL_S",
         "LOG_LEVEL",
         "RECORD_AUDIO_DIR",
+        "SPOTIFY_ENABLED",
+        "SPOTIFY_DEVICE_NAME",
+        "SPOTIFY_LIBRESPOT_BIN",
+        "SPOTIFY_CREDS_DIR",
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_REDIRECT_URI",
+        "SPOTIFY_BITRATE",
+        "SPOTIFY_INITIAL_VOLUME",
+        "SPOTIFY_POLL_S",
+        "SPOTIFY_CARD_PRIORITY",
+        "SPOTIFY_ART_PROXY",
+        "SPOTIFY_LIBRESPOT_ARGS",
     ):
         assert name in text, f"{name} is missing from .env.example"
     assert "GEMINI_API_KEY=\n" in text, "the template must ship an EMPTY key"
