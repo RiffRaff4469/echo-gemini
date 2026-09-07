@@ -34,7 +34,8 @@ class Link(
     private val sharedSecret: String,
     private val deviceId: String,
     private val appVersion: String,
-    private val listener: Listener
+    private val listener: Listener,
+    private val mutedProvider: () -> Boolean = { false }
 ) {
 
     /** Everything the link reports. All calls arrive on OkHttp's reader thread. */
@@ -200,6 +201,10 @@ class Link(
     fun sendCameraStatus(status: Protocol.CameraStatus, detail: String = "") =
         sendControl(Protocol.cameraStatus(status, detail))
 
+    /** Physical mic button, classified by duration (protocol v1.6). */
+    fun sendButton(action: String) =
+        sendControl(Protocol.button(action))
+
     /** A transport button on the now-playing card. The server owns the player. */
     fun sendMedia(action: Protocol.MediaAction) =
         sendControl(Protocol.mediaControl(action))
@@ -217,7 +222,7 @@ class Link(
                 put("microphone", true)
                 put("camera", true)
                 put("display", "960x480")
-                put("tap_to_talk", true)
+                put("mic_button", true)  // v1.6 physical button
                 put("alarms", true)
                 put("timers", true)
                 // v1.5: this build has a music AudioTrack and can render the
@@ -225,6 +230,10 @@ class Link(
                 // stream on Channel.AUDIO_MUSIC -- the frames would be logged
                 // as unexpected and dropped.
                 put("music", true)
+                // v1.6: privacy mute is device-owned and persists across
+                // reboots -- announce the boot state so the server mirror
+                // starts right.
+                put("muted", mutedProvider())
             }
             webSocket.send(Protocol.hello(deviceId, appVersion, capabilities))
         }

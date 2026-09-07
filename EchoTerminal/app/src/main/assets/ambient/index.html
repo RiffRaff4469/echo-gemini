@@ -6,7 +6,8 @@
   width=960 pins the layout viewport to the panel's real pixel width, so every
   length in styles.css is a device pixel on a 960x480 Echo Show 5 and the
   mockup's numbers port across unchanged. user-scalable=no also removes the
-  300ms tap delay, which matters because a screen tap is tap-to-talk.
+  300ms tap delay (screen taps drive UI only since protocol v1.6; the wake
+  word and the physical mic button start conversations).
 -->
 <meta name="viewport" content="width=960, user-scalable=no">
 <title>Echo ambient</title>
@@ -41,7 +42,7 @@
         </div>
       </div>
       <div class="footer-right">
-        <span class="hint" id="home-hint">Tap to talk</span>
+        <span class="hint" id="home-hint">say hey jarvis · press mic</span>
         <button class="chip" data-ui id="alarm-chip">Alarms &middot; 0</button>
         <button class="chip" data-ui id="timer-chip">Timers &middot; 0</button>
       </div>
@@ -165,7 +166,7 @@
      pager and stops the idle cycle. -->
 <div id="convo" class="hidden">
   <div class="convo-pill"><span class="convo-dot"></span><span id="convo-label">Listening</span></div>
-  <div id="convo-hint" class="hidden">tap to stop</div>
+  <div id="convo-hint" class="hidden">press mic to stop</div>
 </div>
 
 <!-- Pushed server cards (display / display_clear). Full-bleed, above
