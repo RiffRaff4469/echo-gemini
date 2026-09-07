@@ -14,7 +14,7 @@ For the day-by-day record of where the project was left, see
 | Device app | **EchoTerminal v1.4** installed (`com.echogemini.terminal.debug`) — ambient WebView clock + voice + camera + alarms/timers |
 | Server | Python `echo-server` on the Windows PC, **174+ pytest green**, protocol **v1.5** |
 | Network | Device on Tailscale (`echo-show-5-1`), one outbound WebSocket to the PC — no inbound ports |
-| Voice | Wake word "hey Jarvis" (server-side openWakeWord), tap-to-talk, tap-to-stop; Jarvis answers in one short sentence |
+| Voice | Wake word "hey Jarvis" + **mic-button talk toggle** (brief 7 v2); **screen = UI only** (no tap-to-talk); Jarvis answers in one short sentence |
 | Vision | Camera code live; **kernel layer verified healthy** (sensor found, info delivered) — HAL reports 0 devices; wall documented at HAL userspace |
 | Music | Spotify (librespot → PCM down the device link): **account linked + binary built + poll backoff fixed — first audio test pending** |
 | Lights | **Govee BLE (brief 13): H617A + H617C verified on hardware, voice tool implemented (472 tests) — voice test pending** |
@@ -53,6 +53,8 @@ open work. Checkmarks are the only thing that moves an item up the list.
 - [x] **Spotify (brief 12) — code complete** (`de622f5`): librespot supervisor +
       resample + `AUDIO_MUSIC` channel + voice tools + now-playing cards,
       arbitration (music pauses for conversation). Covered by tests against fakes.
+- [x] **Memory (brief 8) — code complete** (`0761a85`): Jarvis long-term memory —
+      JSON store + remember tool + prompt injection (482 tests green).
 
 ## Verify queue — what's open RIGHT NOW
 
@@ -80,15 +82,24 @@ Briefs live in `docs/` with git history; a single worker implements one brief
 before the next is dispatched (see `docs/ops-playbook.md` in the operator skill).
 
 1. **Live verify round** (owner, ~15 min): Spotify audio, Govee voice, alarm audio, mic far-field.
-2. **Camera final push** — HAL-userspace log capture at boot; then the give-up call.
-3. **UI brief 10 — live data feeds** (scores / flights / news / stocks on the
-   ambient display; greyed until data).
-4. **HARDWARE brief 7 — physical buttons** (mic button remap: end chat / privacy
-   deaf; camera-switch verify).
-5. **MEMORY brief 8 — Jarvis memory** (persistent context across sessions).
-6. **Mic far-field viability decision** — result of the far-field take gates
-   wake-word design; if it fails, tap-to-talk is the primary input (already the
-   design fallback).
+2. **Camera final push** (parallel ROM lane) — HAL-userspace log capture at boot; then the give-up call.
+3. **UI overhaul — owner-approved 2026-09-07** (Nest-Hub style; briefs ordered by
+   dependency, one worker at a time):
+   1. **HARDWARE-BRIEF-7 v2 — input model change** (`docs/HARDWARE-BRIEF-7-PHYSICAL-CONTROLS.md`):
+      mic button short-press = talk toggle, hold ≥ 1 s = mute + LED, **screen taps
+      stop starting/stopping chats** (v1.4 tap semantics retired; wake word stays).
+   2. **CLOCK-BRIEF — stopwatch + clock pages** (`docs/CLOCK-BRIEF-STOPWATCH.md`):
+      alarms/timers/stopwatch all UI + Gemini controllable, on-device, PC-off.
+   3. **UI-BRIEF-14 — layout engine + 65/35 home** (`docs/UI-BRIEF-14-LAYOUT-ENGINE.md`):
+      focus-driven layout (home/music/chat), widget rail, screen = UI only.
+   4. **UI-BRIEF-15 — music focus** (`docs/UI-BRIEF-15-MUSIC-FOCUS.md`): music hero +
+      compact clock when playing/paused (needs Spotify e2e first).
+   5. **UI-BRIEF-16 — visual answers** (`docs/UI-BRIEF-16-VISUAL-ANSWERS.md`):
+      tappable options/lists (trivia), `select` protocol, prompt rules.
+4. **UI brief 10 — live data feeds** — re-sequenced AFTER the layout engine (it
+   grows the widget gallery; widgets v1 use already-pushed data).
+5. **Mic far-field viability decision** — gates wake-threshold tuning; the mic
+   button now covers the manual-input fallback (tap-to-talk is gone by design).
 
 ## On hold (owner decisions)
 - **PS5 / Bluetooth speaker out** — parked by owner 2026-09-06 ("leave the ps5
