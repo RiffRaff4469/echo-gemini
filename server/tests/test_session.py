@@ -13,7 +13,13 @@ from types import SimpleNamespace
 import pytest
 
 from config import Config
-from gemini_live import LOOK_TOOL, STOP_LOOK_TOOL, LiveSessionManager
+from gemini_live import (
+    LOOK_TOOL,
+    SPOTIFY_PAUSE_TOOL,
+    SPOTIFY_PLAY_TOOL,
+    STOP_LOOK_TOOL,
+    LiveSessionManager,
+)
 from protocol import CameraStatus, UiState
 
 
@@ -713,3 +719,155 @@ async def test_camera_status_without_a_session_is_a_noop() -> None:
     sink = RecordingSink()
     manager = LiveSessionManager(make_config(), sink)
     await manager.note_camera_status(CameraStatus.SHUTTER_CLOSED, "")  # must not raise
+
+
+# --- music (SPOTIFY-BRIEF-12) -----------------------------------------------
+#
+# Note that every test above this line runs against a ``RecordingSink`` with no
+# ``music`` attribute at all, which is the other half of what these check: a
+# sink that predates the feature has to keep working untouched.
+
+
+class FakeMusic:
+    """The slice of ``SpotifyController`` the session reaches for."""
+
+    def __init__(self) -> None:
+        self.holds: list[str] = []
+        self.calls: list[tuple[str, tuple]] = []
+        self.raises: Exception | None = None
+
+    async def hold(self, reason: str, *, max_hold_s: float = 0.0) -> None:
+        if self.raises:
+            raise self.raises
+        self.holds.append(f"+{reason}")
+
+    async def release(self, reason: str) -> None:
+        if self.raises:
+            raise self.raises
+        self.holds.append(f"-{reason}")
+
+    async def play(self, query: str, kind: str = "track") -> dict:
+        self.calls.append(("play", (query, kind)))
+        return {"ok": True, "summary": f"Playing {query}."}
+
+    async def pause(self) -> dict:
+        self.calls.append(("pause", ()))
+        return {"ok": True, "summary": "Paused."}
+
+    async def set_volume(self, percent) -> dict:
+        self.calls.append(("volume", (percent,)))
+        return {"ok": True, "summary": f"Volume {percent}."}
+
+
+class MusicSink(RecordingSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.music = FakeMusic()
+
+
+@pytest.fixture
+async def with_music():
+    session = FakeLiveSession()
+    sink = MusicSink()
+    manager = LiveSessionManager(
+        make_config(spotify_enabled=True), sink, connector=FakeConnector(session)
+    )
+    await manager.start("test")
+    await settle()
+    try:
+        yield manager, session, sink
+    finally:
+        await manager.stop("test teardown")
+
+
+async def test_a_session_holds_the_speaker_and_gives_it_back(with_music) -> None:
+    """The whole of audio arbitration v1, from the session's side: music stops
+    when the wake word fires and comes back when the conversation is over."""
+    manager, _session, sink = with_music
+    assert sink.music.holds == ["+session"]
+
+    await manager.stop("done")
+    assert sink.music.holds == ["+session", "-session"]
+
+
+async def test_the_speaker_is_given_back_even_when_the_session_errors() -> None:
+    """Same rule as the camera release: a session that ended for ANY reason
+    must not leave the music paused."""
+
+    class Exploding:
+        def connect(self):
+            raise RuntimeError("no route to the API")
+
+    sink = MusicSink()
+    manager = LiveSessionManager(
+        make_config(spotify_enabled=True), sink, connector=Exploding()
+    )
+    await manager.start("test")
+    await settle(12)
+    assert sink.music.holds == ["+session", "-session"]
+
+
+async def test_music_that_cannot_be_reached_does_not_break_the_session() -> None:
+    sink = MusicSink()
+    sink.music.raises = RuntimeError("spotify is down")
+    session = FakeLiveSession()
+    manager = LiveSessionManager(
+        make_config(spotify_enabled=True), sink, connector=FakeConnector(session)
+    )
+    await manager.start("test")
+    await settle(10)
+    assert manager.active, "Spotify being unreachable must not stop a conversation"
+    await manager.stop("done")
+
+
+async def test_music_tools_reach_the_controller(with_music) -> None:
+    _manager, session, sink = with_music
+    session.emit(
+        SimpleNamespace(
+            data=None,
+            server_content=None,
+            tool_call=SimpleNamespace(
+                function_calls=[
+                    SimpleNamespace(
+                        name=SPOTIFY_PLAY_TOOL,
+                        id="m1",
+                        args={"query": "lofi", "kind": "playlist"},
+                    )
+                ]
+            ),
+            go_away=None,
+        )
+    )
+    await settle(12)
+    assert sink.music.calls == [("play", ("lofi", "playlist"))]
+    assert session.tool_responses[0].response["summary"] == "Playing lofi."
+
+
+async def test_a_music_tool_on_a_display_without_music_is_an_error_not_a_crash(
+    running,
+) -> None:
+    _manager, session, _sink, _connector = running
+    session.emit_tool_call(SPOTIFY_PAUSE_TOOL)
+    await settle(10)
+    assert "error" in session.tool_responses[0].response
+
+
+async def test_music_functions_are_only_declared_when_spotify_is_on() -> None:
+    """A model told it can play music on a server that cannot will say it is
+    playing something, and then nothing will happen."""
+    off = _declared_tool_names(make_config(spotify_enabled=False))
+    on = _declared_tool_names(make_config(spotify_enabled=True))
+    assert SPOTIFY_PLAY_TOOL not in off
+    assert SPOTIFY_PLAY_TOOL in on
+    assert {SPOTIFY_PAUSE_TOOL, "spotify_next", "spotify_status"} <= on
+
+
+def _declared_tool_names(cfg) -> set[str]:
+    pytest.importorskip("google.genai")
+    from gemini_live import _build_tools
+
+    return {
+        declaration.name
+        for tool in _build_tools(cfg)
+        for declaration in tool.function_declarations
+    }

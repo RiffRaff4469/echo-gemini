@@ -32,8 +32,9 @@ object Protocol {
     // v1.1 added alarms/timers and the now_playing card; v1.2 added `weather`,
     // pushed by the server for the ambient home screen; v1.3 added the
     // post-answer quiet window (`session_quiet` down, `stay` up); v1.4 replaces
-    // `stay` with `stop` -- a tap during a session now ENDS it.
-    const val MINOR = 4
+    // `stay` with `stop` -- a tap during a session now ENDS it; v1.5 adds music
+    // (`Channel.AUDIO_MUSIC` down, `media_control` up) for Spotify.
+    const val MINOR = 5
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
     // produces and consumes exactly these so the server never resamples.
@@ -53,6 +54,20 @@ object Protocol {
         const val AUDIO_UP: Byte = 0x01
         const val AUDIO_DOWN: Byte = 0x02
         const val VIDEO_UP: Byte = 0x03
+
+        /**
+         * Music, 24 kHz mono PCM16 -- the same format as [AUDIO_DOWN], to the
+         * same speaker, and deliberately NOT the same channel.
+         *
+         * [AudioPlayback] means *the assistant is talking*: it reports speaking
+         * state, which closes the microphone uplink (half-duplex, HANDOFF 8.2),
+         * and barge-in flushes everything queued in it. Music arriving there
+         * would hold the mic shut for as long as it played -- no wake word, so
+         * no way to say "pause" -- and the first thing the model said would
+         * flush the album. So music gets [MusicPlayback], its own AudioTrack
+         * tagged USAGE_MEDIA, and Android mixes the two.
+         */
+        const val AUDIO_MUSIC: Byte = 0x04
     }
 
     /** Message type strings, device -> server and server -> device. */
@@ -64,6 +79,7 @@ object Protocol {
         const val CAMERA_STATUS = "camera_status"
         const val DEVICE_LOG = "device_log"
         const val ERROR = "error"
+        const val MEDIA_CONTROL = "media_control"
 
         const val WELCOME = "welcome"
         const val PING = "ping"
@@ -148,6 +164,31 @@ object Protocol {
      * the screen mid-answer means *enough*; cutting the answer off is intended.
      */
     fun stop(): String = envelope(Type.STOP).toString()
+
+    /**
+     * A transport button on the now-playing card (protocol v1.5).
+     *
+     * The player is on the PC, so the button cannot do anything locally: it
+     * says what was pressed and the server turns that into a Spotify call. The
+     * card is deliberately not optimistic about the result -- it redraws when
+     * the next `now_playing` push says the state changed, which is the only
+     * thing that actually knows.
+     */
+    fun mediaControl(action: MediaAction): String =
+        envelope(Type.MEDIA_CONTROL).apply { put("action", action.wire) }.toString()
+
+    /** Mirrors `protocol.MediaAction`. Transport only; volume is spoken, not tapped. */
+    enum class MediaAction(val wire: String) {
+        TOGGLE("toggle"),
+        PAUSE("pause"),
+        RESUME("resume"),
+        NEXT("next"),
+        PREVIOUS("previous");
+
+        companion object {
+            fun from(wire: String?): MediaAction? = values().firstOrNull { it.wire == wire }
+        }
+    }
 
     fun cameraStatus(status: CameraStatus, detail: String = ""): String =
         envelope(Type.CAMERA_STATUS).apply {

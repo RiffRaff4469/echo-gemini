@@ -6,7 +6,7 @@
  *
  *   native -> JS   window.Echo.{linkState,uiState,weather,quiet,schedule,
  *                               display,displayClear,pageData}
- *   JS -> native   window.EchoNative.{tap,openAlarm,openTimer,log}
+ *   JS -> native   window.EchoNative.{tap,openAlarm,openTimer,media,log}
  *
  * The JS side owns no state the app cannot rebuild: if the WebView is torn
  * down and reloaded, MainActivity replays the last link state, ui state,
@@ -23,6 +23,7 @@
     tap: function () { console.log('tap'); },
     openAlarm: function () { console.log('openAlarm'); },
     openTimer: function () { console.log('openTimer'); },
+    media: function (a) { console.log('media ' + a); },
     log: function (m) { console.log(m); }
   };
 
@@ -278,6 +279,8 @@
   var cardPriority = -1e9;
   var cardExpiry = null;
   var cardTimer = null;
+  var cardType = null;
+  var cardKey = null;
 
   function cardPage(inner) { return '<div class="card-wrap">' + inner + '</div>'; }
 
@@ -289,23 +292,101 @@
     if (type === 'image') {
       return cardPage('<img class="card-img" src="' + escapeHtml(p.url) + '" alt="">');
     }
-    if (type === 'now_playing') {
-      var duration = Math.max(0, p.duration_s || 0);
-      var progress = Math.min(Math.max(0, p.progress_s || 0), duration);
-      var pct = duration > 0 ? (progress / duration * 100) : 0;
-      return cardPage(
-        (p.art_url ? '<img class="card-img" style="max-height:200px" src="' + escapeHtml(p.art_url) + '" alt="">' : '') +
-        '<div class="card-main" style="font-size:44px">' + escapeHtml(p.title || '') + '</div>' +
-        '<div class="card-sub">' + escapeHtml(p.artist || '') + ' &middot; ' + escapeHtml(p.album || '') + '</div>' +
-        '<div class="card-bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
-        '<div class="card-sub" style="font-size:18px">' +
-        (p.is_playing === false ? 'Paused' : 'Now playing') + '</div>');
-    }
+    if (type === 'now_playing') return nowPlayingCard(p);
     if (type === 'timer') {
       return cardPage('<div class="card-sub">' + escapeHtml(p.label || '') + '</div>' +
         '<div class="card-main card-count" id="card-count">--:--</div>');
     }
     return null;   // html is handled separately: it goes in a sandbox
+  }
+
+  // --------------------------------------------------- now playing (v1.5)
+  // Laid out across the panel rather than stacked: 960x480 is wide, and the
+  // stacked version left the transport row either off the bottom or too small
+  // to hit. Buttons are >=64 px because they are pressed with a thumb, in the
+  // dark, by someone who is not looking closely.
+  //
+  // Nothing here is optimistic. Pressing pause sends `pause` and changes
+  // nothing on screen; the card redraws when the server's next now_playing push
+  // says the player actually stopped. The player is on the PC and it is the
+  // only thing that knows.
+  var ICONS = {
+    previous: '<path d="M4.5 5h2.5v14H4.5zM20 5v14L9 12z"/>',
+    next: '<path d="M17 5h2.5v14H17zM4 5v14l11-7z"/>',
+    play: '<path d="M8 5v14l11-7z"/>',
+    pause: '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>'
+  };
+
+  function icon(name) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
+  }
+
+  function clockText(seconds) {
+    var s = Math.max(0, Math.round(seconds || 0));
+    return Math.floor(s / 60) + ':' + pad(s % 60);
+  }
+
+  /** Identity of the track on screen, so a re-push updates instead of reloading. */
+  function nowPlayingKey(p) {
+    return (p.title || '') + ' ' + (p.artist || '');
+  }
+
+  function nowPlayingCard(p) {
+    var art = p.art_url
+      ? '<img class="np-art" src="' + escapeHtml(p.art_url) + '" alt="">'
+      : '<div class="np-art np-noart">' + icon('play') + '</div>';
+    return '<div class="np">' + art +
+      '<div class="np-meta">' +
+      '<div class="np-title">' + escapeHtml(p.title || '') + '</div>' +
+      '<div class="np-artist">' + escapeHtml(p.artist || '') + '</div>' +
+      '<div class="np-album">' + escapeHtml(p.album || '') + '</div>' +
+      '<div class="card-bar"><i id="np-bar"></i></div>' +
+      '<div class="np-times"><span id="np-pos">0:00</span>' +
+      '<span id="np-dur">' + clockText(p.duration_s) + '</span></div>' +
+      '<div class="np-row">' +
+      '<button class="np-btn" data-ui data-media="previous">' + icon('previous') + '</button>' +
+      '<button class="np-btn np-main" data-ui data-media="toggle" id="np-toggle"></button>' +
+      '<button class="np-btn" data-ui data-media="next">' + icon('next') + '</button>' +
+      '</div></div></div>';
+  }
+
+  // Progress as the page last understood it. The bar is advanced locally
+  // between pushes so it creeps rather than jumping every five seconds; the
+  // server's next push is always what corrects it.
+  var npProgress = 0;
+  var npDuration = 0;
+  var npPlaying = false;
+
+  function applyNowPlaying(p) {
+    npDuration = Math.max(0, p.duration_s || 0);
+    npProgress = Math.min(Math.max(0, p.progress_s || 0), npDuration || Infinity);
+    npPlaying = p.is_playing !== false;
+    var toggle = $('np-toggle');
+    if (toggle) toggle.innerHTML = icon(npPlaying ? 'pause' : 'play');
+    var duration = $('np-dur');
+    if (duration) duration.textContent = clockText(npDuration);
+    drawNowPlaying();
+    if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
+    if (npPlaying && npDuration > 0) npTick();
+  }
+
+  function drawNowPlaying() {
+    var bar = $('np-bar');
+    var pos = $('np-pos');
+    if (bar) {
+      bar.style.width =
+        (npDuration > 0 ? Math.min(100, npProgress / npDuration * 100) : 0).toFixed(1) + '%';
+    }
+    if (pos) pos.textContent = clockText(npProgress);
+  }
+
+  function npTick() {
+    cardTimer = setTimeout(function () {
+      if (!cardShowing || !npPlaying) return;
+      npProgress = Math.min(npProgress + 1, npDuration);
+      drawNowPlaying();
+      npTick();
+    }, 1000);
   }
 
   function startCountdown(seconds) {
@@ -332,8 +413,23 @@
 
   function showCard(type, payload, durationMs, priority) {
     if (cardShowing && priority < cardPriority) return;
+
+    // A playing track is re-pushed every few seconds so the bar can move.
+    // Re-rendering the card for that would reload the album art and restart
+    // the fade several times a minute, which reads as a flicker; the same
+    // track simply updates in place.
+    if (type === 'now_playing' && cardShowing && cardType === 'now_playing' &&
+        nowPlayingKey(payload) === cardKey) {
+      applyNowPlaying(payload);
+      if (cardExpiry) { clearTimeout(cardExpiry); cardExpiry = null; }
+      if (durationMs > 0) cardExpiry = setTimeout(function () { hideCard(); }, durationMs);
+      return;
+    }
+
     clearCardTimers();
     cardPriority = priority;
+    cardType = type;
+    cardKey = type === 'now_playing' ? nowPlayingKey(payload) : null;
 
     if (type === 'html') {
       // Server-authored markup runs in a sandboxed iframe with no
@@ -353,6 +449,7 @@
       if (html === null) { NATIVE.log('unrenderable display type ' + type); return; }
       cardBody.innerHTML = html;
       if (type === 'timer') startCountdown(payload.seconds);
+      if (type === 'now_playing') applyNowPlaying(payload);
     }
 
     cardShowing = true;
@@ -369,6 +466,8 @@
     if (!cardShowing) return;
     cardShowing = false;
     cardPriority = -1e9;
+    cardType = null;
+    cardKey = null;
     cardEl.classList.remove('shown');
     setTimeout(function () {
       if (cardShowing) return;
@@ -433,6 +532,15 @@
   });
   $('alarm-chip').addEventListener('click', function () { NATIVE.openAlarm(); });
   $('timer-chip').addEventListener('click', function () { NATIVE.openTimer(); });
+
+  // The now-playing transport row. Its buttons carry data-ui, so the handler
+  // above has already declined to treat the press as a tap-to-talk -- pressing
+  // pause must not also open a conversation.
+  cardBody.addEventListener('click', function (e) {
+    var button = e.target.closest('[data-media]');
+    if (!button) return;
+    NATIVE.media(button.getAttribute('data-media'));
+  });
 
   // ------------------------------------------------- native -> JS surface
   window.Echo = {

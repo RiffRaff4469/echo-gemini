@@ -37,10 +37,17 @@ from gemini_live import LiveSessionManager  # noqa: E402
 from protocol import (  # noqa: E402
     Channel,
     DisplayCommand,
+    MediaAction,
     MediaFrame,
     ProtocolError,
     SeqCounter,
     UiState,
+)
+from spotify import (  # noqa: E402
+    ALARM_HOLD,
+    ALARM_HOLD_MAX_S,
+    MUSIC_ERRORS,
+    SpotifyController,
 )
 from wake import WakeWordEngine, build_detector  # noqa: E402
 from weather import Reading, WeatherPoller  # noqa: E402
@@ -68,9 +75,15 @@ class DeviceLink:
     a slow socket.
     """
 
-    def __init__(self, ws: web.WebSocketResponse, remote: str) -> None:
+    def __init__(
+        self, ws: web.WebSocketResponse, remote: str, origin: str = ""
+    ) -> None:
         self.ws = ws
         self.remote = remote
+        # The base URL the DEVICE dialled, taken from the handshake's Host
+        # header. The only address this server knows the device can resolve,
+        # and therefore the only one worth putting in a card's image URL.
+        self.origin = origin
         self.device_id = "?"
         self.app_version = "?"
         self.connected_at = time.time()
@@ -183,6 +196,19 @@ class Hub:
         self.alarms = AlarmCoordinator(
             self.push_alarm_command, timeout_s=cfg.alarm_ack_timeout_s
         )
+        # None when SPOTIFY_ENABLED is off, and every caller treats that as
+        # "this display has no music" rather than as an error -- the same shape
+        # as Live with no API key.
+        self.music: SpotifyController | None = (
+            SpotifyController(
+                cfg,
+                on_pcm=self.push_music_audio,
+                push_card=self.push_display,
+                clear_card=self.clear_display,
+            )
+            if cfg.spotify_enabled
+            else None
+        )
         self.session = LiveSessionManager(cfg, self)
         # Decoration for the home screen, on its own background task. Nothing
         # in the voice path awaits it, and a failed fetch is logged and dropped
@@ -209,6 +235,8 @@ class Hub:
         old = self.link
         self.alarms.disconnected()
         self.link = link
+        if self.music is not None:
+            self.music.device_attached(link.origin)
         if old is not None:
             log.info("replacing existing device link from %s", old.remote)
             await old.close(WSCloseCode.SERVICE_RESTART, "replaced by new link")
@@ -233,6 +261,18 @@ class Hub:
     async def send_audio(self, pcm: bytes) -> None:
         if self.link:
             self.link.send_frame(Channel.AUDIO_DOWN, pcm)
+
+    def push_music_audio(self, pcm: bytes) -> None:
+        """Music, on its own channel. Synchronous: called from the event loop
+        via ``call_soon_threadsafe`` off librespot's reader thread, where there
+        is nothing to await into.
+
+        A separate channel from ``send_audio`` on purpose -- see the note beside
+        ``Channel.AUDIO_MUSIC``. Dropped silently with no device attached, which
+        is the normal state for a server that outlives the Show.
+        """
+        if self.link:
+            self.link.send_frame(Channel.AUDIO_MUSIC, pcm)
 
     async def send_interrupt(self) -> None:
         if self.link:
@@ -295,10 +335,13 @@ class Hub:
             # device that has not been reflashed. Owner semantics supersede it:
             # a tap during a session ends the session either way.
             await self._on_stop()
+        elif isinstance(msg, P.MediaControl):
+            await self._on_media_control(link, msg)
         elif isinstance(msg, P.CameraStatusMsg):
             await self._on_camera_status(msg)
         elif isinstance(msg, P.AlarmStateMsg):
             self.alarms.on_state(msg)
+            await self._release_alarm_hold(msg)
             log.info(
                 "alarm state: %d alarm(s), %d timer(s)%s%s",
                 len(msg.alarms),
@@ -424,9 +467,66 @@ class Hub:
         No attempt is made to open a session for it. Waking the model at 6 a.m.
         to narrate an alarm nobody asked it to narrate would be both expensive
         and rude; if a conversation happens to be open, it gets told.
+
+        It IS what stops the music, though. The alarm wins outright -- it is the
+        one sound in the house with a deadline, and an alarm competing with an
+        album is an alarm that gets slept through.
         """
         log.info("device %s fired: %s", msg.kind.value, msg.label or "(no label)")
+        if self.music is not None:
+            try:
+                await self.music.hold(ALARM_HOLD, max_hold_s=ALARM_HOLD_MAX_S)
+            except MUSIC_ERRORS:
+                log.warning("could not pause the music for the alarm", exc_info=True)
         await self.session.note_alarm_fired(msg.kind, msg.label)
+
+    async def _release_alarm_hold(self, state: P.AlarmStateMsg) -> None:
+        """Give the speaker back once nothing on the device is ringing.
+
+        The device pushes an unsolicited ``alarm_state`` on every change,
+        including a Dismiss or a Snooze tapped on the panel
+        (``AlarmScheduler.refreshRuntime``), so this is the dismissal signal --
+        there is no separate message for it, and inventing one would mean a
+        second thing that can disagree about whether an alarm is ringing.
+        """
+        if self.music is None:
+            return
+        if any(entry.ringing for entry in [*state.alarms, *state.timers]):
+            return
+        try:
+            await self.music.release(ALARM_HOLD)
+        except MUSIC_ERRORS:
+            log.warning("could not resume the music after the alarm", exc_info=True)
+
+    async def _on_media_control(self, link: DeviceLink, msg: P.MediaControl) -> None:
+        """A transport button on the now-playing card (protocol v1.5).
+
+        The device is deliberately not optimistic: it does not redraw the card
+        as paused and hope. This call changes Spotify, the next ``now_playing``
+        push reflects it, and the card is right because it was told, not because
+        it guessed.
+        """
+        if self.music is None:
+            link.send_msg(
+                P.ErrorMsg(code="no_music", message="Spotify is not enabled")
+            )
+            return
+        log.info("media control: %s", msg.action.value)
+        action = msg.action
+        if action is MediaAction.TOGGLE:
+            action = MediaAction.PAUSE if self.music.is_playing else MediaAction.RESUME
+        try:
+            if action is MediaAction.PAUSE:
+                await self.music.pause()
+            elif action is MediaAction.RESUME:
+                await self.music.resume()
+            elif action is MediaAction.NEXT:
+                await self.music.next_track()
+            elif action is MediaAction.PREVIOUS:
+                await self.music.previous_track()
+        except MUSIC_ERRORS as exc:
+            log.warning("media control %s failed: %s", action.value, exc)
+            link.send_msg(P.ErrorMsg(code="media_failed", message=str(exc)))
 
     async def _on_camera_status(self, msg: P.CameraStatusMsg) -> None:
         level = (
@@ -544,10 +644,17 @@ class Hub:
                 if self.cfg.weather_enabled and self.weather.last is not None
                 else None
             ),
+            # Null when SPOTIFY_ENABLED is off. When it is on, this is the
+            # first place to look for "why is there no music": whether the
+            # account is linked, whether librespot is running, and how often
+            # it has had to be restarted.
+            "spotify": self.music.info() if self.music is not None else None,
         }
 
     async def shutdown(self) -> None:
         await self.weather.stop()
+        if self.music is not None:
+            await self.music.stop()
         await self.session.stop("server shutting down")
         if self.link:
             await self.link.close(WSCloseCode.GOING_AWAY, "server shutting down")
@@ -619,7 +726,13 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     )
     await ws.prepare(request)
 
-    link = DeviceLink(ws, request.remote or "?")
+    link = DeviceLink(
+        ws,
+        request.remote or "?",
+        # aiohttp reports the HTTP scheme here, not the ws one, which is what
+        # an <img src> needs anyway.
+        origin=f"{request.scheme}://{request.host}" if request.host else "",
+    )
     await hub.attach(link)
     heartbeat = asyncio.create_task(
         _heartbeat_loop(hub, link, cfg.heartbeat_interval_s), name="link-heartbeat"
@@ -757,6 +870,38 @@ async def vision_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "vision_streaming": hub.session.vision_on})
 
 
+async def spotify_art_handler(request: web.Request) -> web.Response:
+    """Re-serve one track's album art from this machine.
+
+    The device reaches this server over the tailnet and, by design, very little
+    else -- the weather is polled here for exactly that reason. Handing the
+    panel an ``i.scdn.co`` URL and hoping is how a now-playing card ends up with
+    a hole in it, so the art comes from here by default.
+
+    Unauthenticated, like ``/health``: it exposes an album cover for a track id
+    the caller already had to know, and requiring the shared secret would mean
+    putting it in an ``<img src>`` inside a WebView, which is worse than the
+    thing it would be protecting.
+    """
+    hub: Hub = request.app[HUB_KEY]
+    if hub.music is None:
+        return web.json_response({"error": "spotify is not enabled"}, status=404)
+
+    track_id = request.match_info.get("track_id", "")
+    art = await hub.music.art.fetch(track_id)
+    if art is None:
+        return web.json_response({"error": "no art for that track"}, status=404)
+    mime, body = art
+    return web.Response(
+        body=body,
+        content_type=mime,
+        # The art for a given track id never changes, and the card re-requests
+        # it on every push; without this the device refetches an unchanging
+        # 20 kB JPEG every few seconds.
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 async def health_handler(request: web.Request) -> web.Response:
     """Unauthenticated on purpose -- the service wrapper polls it, and it
     exposes no secrets."""
@@ -776,6 +921,7 @@ def build_app(cfg: Config) -> web.Application:
             web.post("/display", display_handler),
             web.post("/display/clear", display_clear_handler),
             web.post("/vision", vision_handler),
+            web.get("/spotify/art/{track_id}", spotify_art_handler),
         ]
     )
 
@@ -785,6 +931,14 @@ def build_app(cfg: Config) -> web.Application:
         # want a network fetch, so WEATHER_ENABLED=false simply skips it.
         if cfg.weather_enabled:
             hub.weather.start()
+        if hub.music is not None:
+            # Never fatal. An unlinked account or a missing librespot binary
+            # logs how to fix it and leaves the rest of the server -- clock,
+            # voice, alarms, display -- entirely unaffected.
+            try:
+                await hub.music.start()
+            except Exception:
+                log.exception("Spotify failed to start; continuing without it")
 
     async def _on_cleanup(_: web.Application) -> None:
         await hub.shutdown()

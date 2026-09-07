@@ -42,6 +42,14 @@ class Link(
         fun onLinkState(state: State, detail: String)
         fun onControl(msg: Protocol.Incoming)
         fun onAudioDown(pcm: ByteArray)
+
+        /**
+         * Music (protocol v1.5). Separate from [onAudioDown] all the way down
+         * to its own AudioTrack -- see the note beside
+         * [Protocol.Channel.AUDIO_MUSIC] for why sharing the voice path would
+         * cost the wake word.
+         */
+        fun onMusicDown(pcm: ByteArray)
     }
 
     enum class State { DISCONNECTED, CONNECTING, CONNECTED }
@@ -192,6 +200,10 @@ class Link(
     fun sendCameraStatus(status: Protocol.CameraStatus, detail: String = "") =
         sendControl(Protocol.cameraStatus(status, detail))
 
+    /** A transport button on the now-playing card. The server owns the player. */
+    fun sendMedia(action: Protocol.MediaAction) =
+        sendControl(Protocol.mediaControl(action))
+
     // --- socket callbacks ---------------------------------------------------
 
     private inner class SocketListener : WebSocketListener() {
@@ -208,6 +220,11 @@ class Link(
                 put("tap_to_talk", true)
                 put("alarms", true)
                 put("timers", true)
+                // v1.5: this build has a music AudioTrack and can render the
+                // transport row. A server that sees this absent should not
+                // stream on Channel.AUDIO_MUSIC -- the frames would be logged
+                // as unexpected and dropped.
+                put("music", true)
             }
             webSocket.send(Protocol.hello(deviceId, appVersion, capabilities))
         }
@@ -231,6 +248,7 @@ class Link(
             val frame = Protocol.decodeFrame(bytes.toByteArray()) ?: return
             when (frame.channel) {
                 Protocol.Channel.AUDIO_DOWN -> listener.onAudioDown(frame.payload)
+                Protocol.Channel.AUDIO_MUSIC -> listener.onMusicDown(frame.payload)
                 else -> Log.w(TAG, "unexpected media on channel ${frame.channel}")
             }
         }

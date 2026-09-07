@@ -12,7 +12,7 @@ runbook.
 
 ## What it is
 
-Three things at once:
+Four things at once:
 
 1. **An everyday ambient display.** A clock by default, plus arbitrary content
    pushed over an HTTP API. **It keeps working when the backend is down** — that
@@ -20,6 +20,9 @@ Three things at once:
 2. **A Gemini voice terminal.** Wake word, or tap anywhere, then talk.
 3. **A Gemini Live *view*.** The camera streams frames so Gemini can see what
    the device sees, with an unmistakable on-screen indicator while it does.
+4. **A Spotify speaker.** librespot runs on the PC and streams PCM down the same
+   socket, so "play some lofi" works by voice and the phone sees a Connect
+   device called "Jarvis" — [docs/SPOTIFY.md](docs/SPOTIFY.md).
 
 The Show has 1 GB of RAM, a 32-bit ARM userspace and one weak microphone, so it
 does none of the thinking. It captures, it renders, and it holds one socket
@@ -104,6 +107,7 @@ echo-gemini/
 │   ├── HANDOFF.md                 # the product plan — source of truth
 │   ├── FLASHING.md                # Phase 1 expanded
 │   ├── ROM-BUILD.md               # Phase 2 expanded
+│   ├── SPOTIFY.md                 # librespot playback: shape, setup, limits
 │   └── HARDWARE-STATUS.md         # capability matrix + MEASURED mic and RAM
 ├── server/
 │   ├── main.py                    # WebSocket hub + HTTP display API
@@ -111,12 +115,17 @@ echo-gemini/
 │   ├── config.py                  # environment-only configuration
 │   ├── wake.py                    # openWakeWord over the inbound audio
 │   ├── gemini_live.py             # Live session lifecycle, audio + video
+│   ├── spotify.py                 # librespot supervisor, arbitration, cards
+│   ├── spotify_api.py             # the Spotify Web API calls, and only those
+│   ├── spotify_auth.py            # OAuth (PKCE) + the gitignored token file
+│   ├── resample.py                # 44.1 kHz stereo → 24 kHz mono PCM16
 │   ├── requirements.txt
 │   ├── install-service.ps1        # Task Scheduler at-boot registration
 │   ├── tests/                     # pytest: no hardware, no key, no network
 │   └── tools/
 │       ├── fake_device.py         # pretends to be the Show
 │       ├── test_display.py        # live-fire display API demo
+│       ├── spotify_login.py       # one-time browser login for Spotify
 │       └── assets/                # 16 kHz TTS sample, 768² test JPEG
 └── EchoTerminal/
     ├── local.properties.example   # server URL + shared secret
@@ -128,7 +137,8 @@ echo-gemini/
         ├── Link.kt                # persistent WebSocket, backoff, heartbeat
         ├── Protocol.kt            # mirror of server/protocol.py
         ├── AudioCapture.kt        # AudioRecord + gain + VAD gate
-        ├── AudioPlayback.kt       # AudioTrack + barge-in flush
+        ├── AudioPlayback.kt       # AudioTrack + barge-in flush (the voice)
+        ├── MusicPlayback.kt       # a SECOND AudioTrack, USAGE_MEDIA (Spotify)
         ├── CameraSource.kt        # single-owner, ≤1 FPS, safe lifecycle
         └── BootReceiver.kt
 ```
@@ -417,6 +427,8 @@ knowing about:
 | `WAKE_THRESHOLD` | `0.5` | Raise if the TV sets it off; lower if it misses you |
 | `VISION_MODE` | `on_demand` | `off`, or `always` |
 | `MIC_GAIN` | `1.0` | **A placeholder.** Set it from the §1.1 measurement |
+| `SPOTIFY_ENABLED` | `false` | Music. Needs Premium + a one-time login — [docs/SPOTIFY.md](docs/SPOTIFY.md) |
+| `SPOTIFY_LIBRESPOT_BIN` | `tools/librespot.exe` | Where the librespot binary is |
 | `RECORD_AUDIO_DIR` | *(empty)* | Log raw mic audio for wake-word tuning |
 
 ---
@@ -446,6 +458,12 @@ Each of these is in the code for a reason that cost someone something to learn.
   which is the point: a hand going to the panel means *enough*.
 - **Half-duplex on purpose.** Suppressing the uplink while the server speaks
   sidesteps acoustic echo cancellation on a device with one weak microphone.
+- **Music has its own audio channel and its own `AudioTrack`.** It is the same
+  format going to the same speaker, and merging it into `AUDIO_DOWN` would still
+  be wrong: that path reports speaking state, which closes the mic uplink, so an
+  album playing would leave no way to say "pause". See `Channel.AUDIO_MUSIC`.
+- **Music pauses for a conversation rather than ducking under it.** Same reason
+  as half-duplex: one weak mic loses the question to music at any level.
 - **Voice and vision processing stay on the server.** The clock, alarms and
   timers run locally so they keep working with the PC switched off.
 
@@ -464,6 +482,11 @@ Each of these is in the code for a reason that cost someone something to learn.
   requiring it, and upscaling would invent detail.
 - **Hardware validation of the v2 alarm build remains outstanding.** See the
   [verification report](docs/BUILD-3-RESULTS.md).
+- **Spotify is written but unproven end to end.** No librespot binary has been
+  run, so `--backend pipe` has not been observed emitting PCM and the flag names
+  are unconfirmed; the one-time login has not been done and no audio has reached
+  the Show. Everything below the binary is covered by tests against fakes. See
+  [docs/SPOTIFY.md](docs/SPOTIFY.md).
 
 ---
 

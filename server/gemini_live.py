@@ -39,6 +39,7 @@ from alarms import (
 )
 from config import Config
 from protocol import AUDIO_UP_RATE, VIDEO_MIME, AlarmKind, CameraStatus, UiState
+from spotify import MUSIC_ERRORS, SESSION_HOLD
 from wake import EnergyVad
 
 log = logging.getLogger("echo.live")
@@ -68,6 +69,29 @@ _ALARM_TOOLS = frozenset(
     }
 )
 
+# Music. Declared only when SPOTIFY_ENABLED: a model told it can play music on
+# a server that cannot will say it is playing something and then nothing will
+# happen, which is a worse failure than not offering.
+SPOTIFY_PLAY_TOOL = "spotify_play"
+SPOTIFY_PAUSE_TOOL = "spotify_pause"
+SPOTIFY_RESUME_TOOL = "spotify_resume"
+SPOTIFY_NEXT_TOOL = "spotify_next"
+SPOTIFY_PREVIOUS_TOOL = "spotify_previous"
+SPOTIFY_VOLUME_TOOL = "spotify_set_volume"
+SPOTIFY_STATUS_TOOL = "spotify_status"
+
+_SPOTIFY_TOOLS = frozenset(
+    {
+        SPOTIFY_PLAY_TOOL,
+        SPOTIFY_PAUSE_TOOL,
+        SPOTIFY_RESUME_TOOL,
+        SPOTIFY_NEXT_TOOL,
+        SPOTIFY_PREVIOUS_TOOL,
+        SPOTIFY_VOLUME_TOOL,
+        SPOTIFY_STATUS_TOOL,
+    }
+)
+
 AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 
 # Bound the uplink queue so a stalled API connection cannot grow unboundedly on
@@ -78,9 +102,15 @@ _VIDEO_QUEUE_MAX = 3
 
 
 class SessionSink(Protocol):
-    """What a session needs to push back at the device. Implemented by ``Hub``."""
+    """What a session needs to push back at the device. Implemented by ``Hub``.
+
+    ``music`` is None whenever Spotify is switched off, and every use of it is
+    guarded -- ``getattr(sink, "music", None)`` -- so a sink that predates the
+    attribute entirely (the test doubles do) keeps working.
+    """
 
     alarms: AlarmCoordinator
+    music: Any
 
     async def send_audio(self, pcm: bytes) -> None: ...
     async def send_interrupt(self) -> None: ...
@@ -215,6 +245,98 @@ def _alarm_declarations() -> list[Any]:
     ]
 
 
+def _spotify_declarations() -> list[Any]:
+    """Music functions.
+
+    ``spotify_play`` takes a ``kind`` because "play Blue Monday" and "play some
+    lofi" want completely different things -- one track, or an hour of a
+    playlist -- and the model is the only party in the chain that can tell which
+    was meant. Guessing from the phrasing here would be worse: it would be the
+    same guess every time, and it would be wrong on the request the owner makes
+    most.
+    """
+    from google.genai import types
+
+    def _nullary(name: str, description: str) -> Any:
+        return types.FunctionDeclaration(
+            name=name,
+            description=description,
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        )
+
+    return [
+        types.FunctionDeclaration(
+            name=SPOTIFY_PLAY_TOOL,
+            description=(
+                "Play music on the display's speaker through Spotify. Use this "
+                "whenever the user asks to hear something -- a song, an artist, "
+                "an album, or a mood like 'something relaxing'. Say what started "
+                "playing in one short sentence afterwards."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "query": types.Schema(
+                        type=types.Type.STRING,
+                        description=(
+                            "What to search Spotify for: 'Blue Monday New Order', "
+                            "'Kind of Blue', 'lofi beats'. Include the artist when "
+                            "the user named one."
+                        ),
+                    ),
+                    "kind": types.Schema(
+                        type=types.Type.STRING,
+                        description=(
+                            "track for one specific song; album for a named "
+                            "record; artist to shuffle an artist's music; "
+                            "playlist for a mood or genre ('something jazzy', "
+                            "'lofi', 'music for cooking'). Defaults to track."
+                        ),
+                    ),
+                },
+                required=["query"],
+            ),
+        ),
+        _nullary(
+            SPOTIFY_PAUSE_TOOL,
+            "Pause the music that is playing on the display's speaker.",
+        ),
+        _nullary(
+            SPOTIFY_RESUME_TOOL,
+            "Resume music that was paused, from where it stopped.",
+        ),
+        _nullary(SPOTIFY_NEXT_TOOL, "Skip to the next track."),
+        _nullary(
+            SPOTIFY_PREVIOUS_TOOL,
+            "Go back to the previous track, or restart the current one.",
+        ),
+        types.FunctionDeclaration(
+            name=SPOTIFY_VOLUME_TOOL,
+            description=(
+                "Set the music volume as a percentage. Use this for 'turn it "
+                "down', 'louder', 'volume to forty'. It changes the music only, "
+                "not how loudly you speak."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "percent": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="0 to 100. Roughly: quiet 20, normal 50, loud 80.",
+                    )
+                },
+                required=["percent"],
+            ),
+        ),
+        _nullary(
+            SPOTIFY_STATUS_TOOL,
+            "Read back what is playing right now. Call this before answering "
+            "any question about the current track rather than relying on what "
+            "was said earlier in the conversation.",
+        ),
+    ]
+
+
 def _build_tools(cfg: Config) -> list[Any]:
     """Everything the model may call: camera (``on_demand`` only) and alarms.
 
@@ -222,10 +344,16 @@ def _build_tools(cfg: Config) -> list[Any]:
     has nothing to decide; in ``off`` mode the camera must never open, so
     declaring the function would be a lie. The alarm functions are always
     declared -- they need no hardware beyond the device already being there.
+    Music is declared only when Spotify is configured, for the same reason as
+    the camera: a function the server cannot honour is a promise the model
+    makes on its behalf.
     """
     from google.genai import types
 
     declarations: list[Any] = list(_alarm_declarations())
+
+    if cfg.spotify_enabled:
+        declarations.extend(_spotify_declarations())
 
     if cfg.vision_mode == "on_demand":
         declarations.extend(
@@ -265,7 +393,7 @@ def _system_instruction(cfg: Config) -> str:
     told yesterday's evening.
     """
     now = datetime.now().astimezone()
-    return (
+    text = (
         f"{cfg.system_instruction}\n\n"
         f"[context] It is currently {now:%A %d %B %Y}, "
         f"{now:%H:%M} local time ({now.tzname() or 'local'}). "
@@ -274,6 +402,15 @@ def _system_instruction(cfg: Config) -> str:
         "relying on memory -- the display rings on its own even when this "
         "server is off, and it is the only thing that knows what is set."
     )
+    if cfg.spotify_enabled:
+        text += (
+            " The display is also a Spotify speaker. Use the spotify functions "
+            "to play, pause, skip and set the volume, and spotify_status to "
+            "find out what is playing -- never guess. Music pauses by itself "
+            "while you are being spoken to and comes back when the "
+            "conversation ends, so there is no need to pause it yourself first."
+        )
+    return text
 
 
 def _build_connect_config(cfg: Config) -> Any:
@@ -570,6 +707,27 @@ class LiveSessionManager:
             except (asyncio.QueueEmpty, asyncio.QueueFull):
                 pass
 
+    async def _music_hold(self, taken: bool) -> None:
+        """Pause the music for the duration of this session, and put it back.
+
+        Pausing rather than ducking: the Show has one weak microphone and no
+        echo cancellation, and music quietly under a question is enough to lose
+        the question. It is the same trade the half-duplex mic gate makes.
+
+        Never raises. Spotify being unreachable is not a reason to fail to open
+        -- or to fail to close -- a conversation.
+        """
+        music = getattr(self.sink, "music", None)
+        if music is None:
+            return
+        try:
+            if taken:
+                await music.hold(SESSION_HOLD)
+            else:
+                await music.release(SESSION_HOLD)
+        except Exception:
+            log.exception("music %s failed", "hold" if taken else "release")
+
     async def request_vision(self, enabled: bool) -> None:
         """Turn the device camera on or off for this session.
 
@@ -585,6 +743,10 @@ class LiveSessionManager:
 
     async def _run(self) -> None:
         pumps: list[asyncio.Task] = []
+        # Before the connect, not after: the wake word has already fired and
+        # the user is talking, so every extra moment of music is a moment of the
+        # question the model will not hear.
+        await self._music_hold(True)
         try:
             connector = self._connector_or_build()
             async with connector.connect() as session:
@@ -635,6 +797,10 @@ class LiveSessionManager:
                 await self.sink.set_state(UiState.IDLE)
             except Exception:
                 log.exception("failed to reset device state after session close")
+            # Unconditional, for the same reason the camera release above is:
+            # a session that ended for ANY reason must not leave the music
+            # paused. This is what makes the album come back on afterwards.
+            await self._music_hold(False)
             log.info(
                 "Live session ended after %.1fs (dropped %d audio frames)",
                 self._clock() - self._started_at,
@@ -832,9 +998,67 @@ class LiveSessionManager:
             return {"status": "camera_closed"}
         if call.name in _ALARM_TOOLS:
             return await self._run_alarm_tool(call.name, dict(call.args or {}))
+        if call.name in _SPOTIFY_TOOLS:
+            return await self._run_spotify_tool(call.name, dict(call.args or {}))
 
         log.warning("model called unknown tool %r", call.name)
         return {"error": f"unknown function {call.name}"}
+
+    async def _run_spotify_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Apply a music tool call and answer with what actually happened.
+
+        The response is the controller's own summary, which it builds from the
+        player state *after* the change rather than from the request -- so "now
+        playing Weightless" is backed by Spotify saying so, in the same way an
+        alarm confirmation is backed by the device saying so.
+
+        Note what this does NOT do: release the session's own music hold. The
+        hold is what stopped the album when the wake word fired, and a
+        ``spotify_play`` mid-conversation must not be undone the moment the
+        conversation ends. ``_run``'s teardown handles that, and its
+        "resume if it was playing before" rule reads the state from before the
+        session -- which is precisely why the new track keeps playing.
+        """
+        music = getattr(self.sink, "music", None)
+        if music is None:
+            return {"error": "This display cannot play music."}
+
+        # A tool call is user intent, and a search plus a play can take a
+        # second or two; without this the quiet window can close the session
+        # out from under the confirmation.
+        self.touch()
+
+        try:
+            result = await self._dispatch_spotify(music, name, args)
+        except MUSIC_ERRORS as exc:
+            log.warning("music tool %s failed: %s", name, exc)
+            return {"error": str(exc)}
+        except Exception:
+            log.exception("music tool %s crashed", name)
+            return {"error": "Something went wrong talking to Spotify."}
+
+        log.info("music tool %s -> %s", name, result.get("summary"))
+        return result
+
+    @staticmethod
+    async def _dispatch_spotify(
+        music: Any, name: str, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        if name == SPOTIFY_PLAY_TOOL:
+            return await music.play(
+                str(args.get("query") or ""), str(args.get("kind") or "track").lower()
+            )
+        if name == SPOTIFY_PAUSE_TOOL:
+            return await music.pause()
+        if name == SPOTIFY_RESUME_TOOL:
+            return await music.resume()
+        if name == SPOTIFY_NEXT_TOOL:
+            return await music.next_track()
+        if name == SPOTIFY_PREVIOUS_TOOL:
+            return await music.previous_track()
+        if name == SPOTIFY_VOLUME_TOOL:
+            return await music.set_volume(args.get("percent"))
+        return await music.status()
 
     async def _run_alarm_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Apply an alarm tool call on the device and answer with what it did.

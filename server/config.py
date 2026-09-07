@@ -13,10 +13,13 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+import spotify_auth
 
 log = logging.getLogger("echo.config")
 
@@ -128,6 +131,32 @@ class Config:
     weather_lon: float = -76.1474
     weather_poll_s: float = 600.0
 
+    # --- Spotify ------------------------------------------------------------
+    # librespot runs here as a subprocess and appears on the account as a
+    # Connect speaker; its PCM is resampled and sent down the device link (see
+    # server/spotify.py). Off by default: it needs Premium and a one-time
+    # browser login, and neither should be a precondition for the clock.
+    spotify_enabled: bool = False
+    spotify_device_name: str = "Jarvis"
+    spotify_librespot_bin: str = "tools/librespot.exe"
+    # Gitignored. Holds the OAuth refresh token and librespot's own credential
+    # cache -- treat it exactly as you would the account password.
+    spotify_creds_dir: str = "server/spotify_creds"
+    spotify_client_id: str = ""
+    spotify_redirect_uri: str = ""
+    # 96 | 160 | 320 kbps, as librespot accepts them.
+    spotify_bitrate: int = 320
+    spotify_initial_volume: int = 60
+    # Seconds between now-playing polls. Also the granularity of the progress
+    # bar on the card, since that is what makes the push worth sending.
+    spotify_poll_s: float = 5.0
+    spotify_card_priority: int = 0
+    # Re-serve album art from this server rather than handing the device a
+    # Spotify CDN URL. The Show reaches this machine and, by design, not much
+    # else -- the same reason the weather is polled here.
+    spotify_art_proxy: bool = True
+    spotify_extra_args: list[str] = field(default_factory=list)
+
     # --- device tuning ------------------------------------------------------
     # Software gain applied on-device before uplink. The real value comes from
     # the Phase 3 mic measurement -- see docs/HARDWARE-STATUS.md.
@@ -152,6 +181,7 @@ class Config:
             f"wake={self.wake_model if self.wake_enabled else 'off'} "
             f"vision={self.vision_mode} "
             f"weather={f'{self.weather_lat:.3f},{self.weather_lon:.3f}' if self.weather_enabled else 'off'} "
+            f"spotify={self.spotify_device_name if self.spotify_enabled else 'off'} "
             f"idle_close={self.session_idle_timeout_s:g}s "
             f"quiet_close={self.post_answer_silence_s:g}s"
         )
@@ -198,6 +228,20 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         weather_lat=_env_float("WEATHER_LAT", 43.0481),
         weather_lon=_env_float("WEATHER_LON", -76.1474),
         weather_poll_s=_env_float("WEATHER_POLL_S", 600.0),
+        spotify_enabled=_env_bool("SPOTIFY_ENABLED", False),
+        spotify_device_name=_env("SPOTIFY_DEVICE_NAME", "Jarvis"),
+        spotify_librespot_bin=_env("SPOTIFY_LIBRESPOT_BIN", "tools/librespot.exe"),
+        spotify_creds_dir=_env("SPOTIFY_CREDS_DIR", "server/spotify_creds"),
+        spotify_client_id=_env("SPOTIFY_CLIENT_ID", spotify_auth.LIBRESPOT_CLIENT_ID),
+        spotify_redirect_uri=_env(
+            "SPOTIFY_REDIRECT_URI", spotify_auth.DEFAULT_REDIRECT_URI
+        ),
+        spotify_bitrate=_env_int("SPOTIFY_BITRATE", 320),
+        spotify_initial_volume=_env_int("SPOTIFY_INITIAL_VOLUME", 60),
+        spotify_poll_s=_env_float("SPOTIFY_POLL_S", 5.0),
+        spotify_card_priority=_env_int("SPOTIFY_CARD_PRIORITY", 0),
+        spotify_art_proxy=_env_bool("SPOTIFY_ART_PROXY", True),
+        spotify_extra_args=shlex.split(_env("SPOTIFY_LIBRESPOT_ARGS", "")),
         mic_gain=_env_float("MIC_GAIN", 1.0),
         log_level=_env("LOG_LEVEL", "INFO").upper(),
         record_audio_dir=_env("RECORD_AUDIO_DIR", ""),
@@ -230,6 +274,37 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         )
         cfg.weather_poll_s = 60.0
 
+    # Both are resolved against the repo root so a relative value in .env means
+    # the same thing whether the server is started from the repo, from the
+    # service wrapper, or from somewhere else entirely.
+    cfg.spotify_creds_dir = str(_resolve(cfg.spotify_creds_dir))
+    cfg.spotify_librespot_bin = str(_resolve(cfg.spotify_librespot_bin))
+    if cfg.spotify_enabled:
+        if cfg.spotify_bitrate not in (96, 160, 320):
+            raise ConfigError(
+                f"SPOTIFY_BITRATE must be 96, 160 or 320, got {cfg.spotify_bitrate}"
+            )
+        if not 0 <= cfg.spotify_initial_volume <= 100:
+            raise ConfigError("SPOTIFY_INITIAL_VOLUME must be in [0, 100]")
+        if not cfg.spotify_device_name.strip():
+            raise ConfigError("SPOTIFY_DEVICE_NAME must not be empty")
+        if cfg.spotify_poll_s < 1.0:
+            # The card's progress bar is the only thing that needs this, and it
+            # is a bar on a bedside display. Polling Spotify harder buys nothing
+            # and counts against the account's rate limit.
+            cfg.warnings.append(
+                f"SPOTIFY_POLL_S={cfg.spotify_poll_s:g} is below the 1 s floor; using 1"
+            )
+            cfg.spotify_poll_s = 1.0
+        if not Path(cfg.spotify_librespot_bin).is_file():
+            # Not fatal: the rest of the server, including every other tool,
+            # must still come up. Spotify simply reports itself unavailable.
+            cfg.warnings.append(
+                f"SPOTIFY_ENABLED is set but no librespot binary at "
+                f"{cfg.spotify_librespot_bin} -- music will not play. Download "
+                "the Windows build or set SPOTIFY_LIBRESPOT_BIN."
+            )
+
     if not cfg.shared_secret:
         raise ConfigError(
             "ECHO_SHARED_SECRET is not set. The WebSocket handshake requires it "
@@ -252,6 +327,12 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         )
 
     return cfg
+
+
+def _resolve(path_raw: str) -> Path:
+    """Interpret a configured path relative to the repo root, not the cwd."""
+    path = Path(path_raw).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def _load_system_instruction() -> str:

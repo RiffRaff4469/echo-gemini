@@ -83,6 +83,12 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     private var link: Link? = null
     private var capture: AudioCapture? = null
     private var playback: AudioPlayback? = null
+
+    /**
+     * Music, on its own AudioTrack (protocol v1.5). Started alongside
+     * [playback] but never in place of it: see [Protocol.Channel.AUDIO_MUSIC].
+     */
+    private var music: MusicPlayback? = null
     private var camera: CameraSource? = null
 
     private var sensorManager: SensorManager? = null
@@ -136,8 +142,25 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             Log.i(TAG, "no light sensor; falling back to the clock-hour dim curve")
         }
 
+        startMusicPlayback()
         checkPermissions()
         startLink()
+    }
+
+    /**
+     * Music output needs no runtime permission, so it is started here rather
+     * than in [startAudioIfPermitted] -- a device where the microphone was
+     * denied is still perfectly good as a speaker, and quietly losing Spotify
+     * along with the voice path would be a confusing way to find that out.
+     */
+    private fun startMusicPlayback() {
+        val player = MusicPlayback()
+        music = if (player.start()) {
+            player
+        } else {
+            Log.e(TAG, "music AudioTrack would not start; Spotify audio is unavailable")
+            null
+        }
     }
 
     /**
@@ -301,6 +324,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
         capture?.stop()
         playback?.stop()
+        music?.stop()
         link?.stop()
         push?.destroy()
         web?.destroy()
@@ -386,12 +410,30 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
      * is a tap wherever it lands, and [handleTap] is the single place that
      * decides what it means -- the page must not be able to reach a second,
      * divergent rule.
+     *
+     * [onMedia] is the exception that proves it: the transport buttons on the
+     * now-playing card are a page interaction and mark themselves as such, so
+     * they never reach [handleTap] and pressing pause does not also start a
+     * conversation.
      */
     private val webCallbacks = object : AmbientWeb.Callbacks {
         override fun onTap() = handleTap()
 
         override fun onOpenAlarm() = openSchedule("alarm")
         override fun onOpenTimer() = openSchedule("timer")
+
+        override fun onMedia(action: Protocol.MediaAction) {
+            // Nothing changes locally. The player is on the PC, so this is a
+            // request; the card redraws when the server's next now_playing push
+            // says what actually happened.
+            if (link?.state != Link.State.CONNECTED) {
+                Log.i(TAG, "media ${action.wire} ignored: link is ${link?.state}")
+                return
+            }
+            Log.i(TAG, "media control: ${action.wire}")
+            link?.sendMedia(action)
+        }
+
         override fun onWebViewFailed(reason: String) = enterCanvasMode(reason)
     }
 
@@ -510,6 +552,10 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 web?.quietWindow(false)
                 capture?.uplinkEnabled = true
                 playback?.flush()
+                // Buffered music from a server that is no longer there is by
+                // definition the past; playing it out after a reconnect is
+                // worse than the silence.
+                music?.flush()
                 // And the camera goes with it. No server means no session.
                 camera?.release()
             }
@@ -615,6 +661,10 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
     override fun onAudioDown(pcm: ByteArray) {
         playback?.enqueue(pcm)
+    }
+
+    override fun onMusicDown(pcm: ByteArray) {
+        music?.enqueue(pcm)
     }
 
     private fun updateTiles() {

@@ -23,3 +23,6 @@ os.environ["WAKE_DOWNLOAD_MODELS"] = "false"
 # ...and never reach out to Open-Meteo. test_weather.py drives the poller
 # directly with an injected fetch instead.
 os.environ["WEATHER_ENABLED"] = "false"
+# ...and never spawn librespot or touch a real Spotify account. test_spotify.py
+# builds its own enabled Config with fakes injected.
+os.environ["SPOTIFY_ENABLED"] = "false"

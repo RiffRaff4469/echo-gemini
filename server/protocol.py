@@ -39,11 +39,12 @@ PROTOCOL_VERSION = 1
 # ``now_playing`` display card; v1.2 adds ``weather``, pushed for the ambient
 # home screen; v1.3 adds the post-answer quiet window (``session_quiet`` down,
 # ``stay`` up); v1.4 replaces ``stay`` with ``stop`` -- a tap during a session
-# now ENDS it rather than extending it (FIX-BRIEF-11). A v1.0 peer stays
-# compatible: it simply never sends or understands the new types, and both sides
-# ignore what they do not recognise. ``hello`` and ``welcome`` announce it so
-# each end can log the skew.
-PROTOCOL_MINOR = 4
+# now ENDS it rather than extending it (FIX-BRIEF-11); v1.5 adds music --
+# ``Channel.AUDIO_MUSIC`` down and ``media_control`` up (SPOTIFY-BRIEF-12). A
+# v1.0 peer stays compatible: it simply never sends or understands the new
+# types, and both sides ignore what they do not recognise. ``hello`` and
+# ``welcome`` announce it so each end can log the skew.
+PROTOCOL_MINOR = 5
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
@@ -77,6 +78,21 @@ class Channel(IntEnum):
     AUDIO_UP = 0x01  # device mic  -> server (PCM16 16 kHz)
     AUDIO_DOWN = 0x02  # server     -> device (PCM16 24 kHz)
     VIDEO_UP = 0x03  # device cam  -> server (JPEG)
+    AUDIO_MUSIC = 0x04  # server   -> device (PCM16 24 kHz), v1.5
+
+
+# Why music does not simply reuse ``AUDIO_DOWN``, which carries the same format
+# to the same speaker: on the device, ``AUDIO_DOWN`` feeds ``AudioPlayback``,
+# and ``AudioPlayback`` means *the assistant is talking*. It reports speaking
+# state, which closes the microphone uplink (half-duplex, HANDOFF 8.2), and
+# barge-in flushes it. Music on that channel would therefore hold the mic shut
+# for as long as it played -- no wake word, so no way to say "pause" -- and the
+# first thing the model said would silence the album.
+#
+# So music gets its own channel and its own ``AudioTrack`` on the device, tagged
+# USAGE_MEDIA rather than USAGE_ASSISTANT: two streams, mixed by Android, each
+# with the lifecycle it actually wants. Arbitration between them stays a server
+# decision (``spotify.SpotifyController`` holds), not a mixing one.
 
 
 class MsgType(str, Enum):
@@ -93,6 +109,7 @@ class MsgType(str, Enum):
     ERROR = "error"
     ALARM_STATE = "alarm_state"  # v1.1
     ALARM_FIRED = "alarm_fired"  # v1.1
+    MEDIA_CONTROL = "media_control"  # v1.5
 
     # server -> device
     WELCOME = "welcome"
@@ -135,6 +152,21 @@ class DisplayType(str, Enum):
     IMAGE = "image"
     TIMER = "timer"
     NOW_PLAYING = "now_playing"  # v1.1 -- rendered like any other card
+
+
+class MediaAction(str, Enum):
+    """What the touch row on the now-playing card is asking for (v1.5).
+
+    Deliberately transport-only. Volume is not here: the panel has no volume
+    affordance, the account's volume is a Connect property shared with every
+    other client, and "turn it down" is a sentence the model already handles.
+    """
+
+    TOGGLE = "toggle"  # pause if playing, resume if not
+    PAUSE = "pause"
+    RESUME = "resume"
+    NEXT = "next"
+    PREVIOUS = "previous"
 
 
 class AlarmOp(str, Enum):
@@ -320,9 +352,11 @@ class DisplayCommand:
             if seconds <= 0:
                 raise ProtocolError("payload.seconds must be positive")
         elif self.type is DisplayType.NOW_PLAYING:
-            # Plumbing only: this card is pushed by whatever ends up driving
-            # playback (see docs/SPOTIFY.md). Nothing in this repo plays audio
-            # from it -- it is a picture of what is playing, not a player.
+            # Pushed by ``spotify.SpotifyController`` while music is playing on
+            # this device, and still a plain display card: it is a picture of
+            # what is playing, not the player. The transport buttons the ambient
+            # page draws on it come back as ``media_control``, not as anything
+            # in this payload.
             _require_str(p, "title")
             _optional_str(p, "artist")
             _optional_str(p, "album")
@@ -482,6 +516,28 @@ class Stay(Message):
 
     def fields(self) -> dict[str, Any]:
         return {}
+
+
+@dataclass
+class MediaControl(Message):
+    """device -> server: the user touched a transport control (v1.5).
+
+    The card is drawn by the ambient page, but the player is on the PC, so the
+    button cannot do anything locally -- it says what was pressed and the server
+    turns that into a Spotify call. Nothing on the device is optimistic about
+    it: the button state changes when the next ``now_playing`` push says it did,
+    which is the only thing that knows.
+
+    A press that arrives with Spotify disabled is answered with an ``error``
+    message and otherwise ignored; it cannot start anything.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.MEDIA_CONTROL
+
+    action: MediaAction = MediaAction.TOGGLE
+
+    def fields(self) -> dict[str, Any]:
+        return {"action": self.action.value}
 
 
 @dataclass
@@ -883,6 +939,7 @@ for _cls in (
     Tap,
     Stop,
     Stay,
+    MediaControl,
     CameraStatusMsg,
     DeviceLog,
     ErrorMsg,
@@ -955,6 +1012,16 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
         return Stop(ts=ts)
     if cls is Stay:
         return Stay(ts=ts)
+    if cls is MediaControl:
+        try:
+            action = MediaAction(data.get("action"))
+        except ValueError:
+            allowed = "|".join(a.value for a in MediaAction)
+            raise ProtocolError(
+                f"media_control.action must be one of {allowed} "
+                f"(got {data.get('action')!r})"
+            ) from None
+        return MediaControl(action=action, ts=ts)
     if cls is CameraStatusMsg:
         return CameraStatusMsg(
             status=CameraStatus(data.get("status")),
