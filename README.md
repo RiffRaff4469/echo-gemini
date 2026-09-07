@@ -6,7 +6,9 @@ voice terminal you can talk to, and a camera Gemini can see through.
 
 The full product plan — every decision, version constraint and source URL — is
 [`docs/HANDOFF.md`](docs/HANDOFF.md). **Read that first.** This README is the
-runbook.
+runbook. **Where the project stands right now** is
+[`ROADMAP.md`](ROADMAP.md) — shipped milestones, the open verify queue, and
+what is next. Day-level stopping-point records: `docs/STATUS-*.md`.
 
 ---
 
@@ -101,6 +103,7 @@ Two more, while you are here:
 ```
 echo-gemini/
 ├── README.md                      # you are here
+├── ROADMAP.md                     # shipped / open / next — start here for status
 ├── .env.example                   # every server config var; copy to .env
 ├── pytest.ini
 ├── docs/
@@ -108,7 +111,9 @@ echo-gemini/
 │   ├── FLASHING.md                # Phase 1 expanded
 │   ├── ROM-BUILD.md               # Phase 2 expanded
 │   ├── SPOTIFY.md                 # librespot playback: shape, setup, limits
-│   └── HARDWARE-STATUS.md         # capability matrix + MEASURED mic and RAM
+│   ├── HARDWARE-STATUS.md         # capability matrix + MEASURED mic and RAM
+│   ├── BUILD-3-RESULTS.md         # v2 alarms/timers verification report
+│   └── STATUS-2026-09-07.md       # stopping-point snapshot (see ROADMAP)
 ├── server/
 │   ├── main.py                    # WebSocket hub + HTTP display API
 │   ├── protocol.py                # wire schema (mirrored by the client)
