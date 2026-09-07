@@ -20,6 +20,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import spotify_auth
+from govee import DEFAULT_DEVICES, parse_devices
 
 log = logging.getLogger("echo.config")
 
@@ -131,6 +132,9 @@ class Config:
     weather_lon: float = -76.1474
     weather_poll_s: float = 600.0
 
+    govee_enabled: bool = False
+    govee_devices: str = DEFAULT_DEVICES
+
     # --- Spotify ------------------------------------------------------------
     # librespot runs here as a subprocess and appears on the account as a
     # Connect speaker; its PCM is resampled and sent down the device link (see
@@ -228,6 +232,8 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         weather_lat=_env_float("WEATHER_LAT", 43.0481),
         weather_lon=_env_float("WEATHER_LON", -76.1474),
         weather_poll_s=_env_float("WEATHER_POLL_S", 600.0),
+        govee_enabled=_env_bool("GOVEE_ENABLED", False),
+        govee_devices=_env("GOVEE_DEVICES", DEFAULT_DEVICES),
         spotify_enabled=_env_bool("SPOTIFY_ENABLED", False),
         spotify_device_name=_env("SPOTIFY_DEVICE_NAME", "Jarvis"),
         spotify_librespot_bin=_env("SPOTIFY_LIBRESPOT_BIN", "tools/librespot.exe"),
@@ -279,6 +285,11 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
     # service wrapper, or from somewhere else entirely.
     cfg.spotify_creds_dir = str(_resolve(cfg.spotify_creds_dir))
     cfg.spotify_librespot_bin = str(_resolve(cfg.spotify_librespot_bin))
+    if cfg.govee_enabled:
+        try:
+            parse_devices(cfg.govee_devices)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
     if cfg.spotify_enabled:
         if cfg.spotify_bitrate not in (96, 160, 320):
             raise ConfigError(

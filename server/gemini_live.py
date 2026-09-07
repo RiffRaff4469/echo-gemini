@@ -352,6 +352,28 @@ def _build_tools(cfg: Config) -> list[Any]:
 
     declarations: list[Any] = list(_alarm_declarations())
 
+    if cfg.govee_enabled:
+        declarations.append(types.FunctionDeclaration(
+            name="govee_control",
+            description=("Control Govee lights: on, off, RGB color, or brightness. "
+                         "Use target 'jaiden lights' for H617A, 'patrick lights' for H617C. "
+                         "Unqualified 'lights' means all devices; omit target. "
+                         "Report any errors; sent means a BLE write, not confirmed device state."),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "action": types.Schema(type=types.Type.STRING,
+                                           enum=["on", "off", "color", "brightness"]),
+                    "target": types.Schema(type=types.Type.STRING),
+                    **{channel: types.Schema(type=types.Type.INTEGER,
+                                             description="Required for color; 0-255")
+                       for channel in ("red", "green", "blue")},
+                    "percent": types.Schema(type=types.Type.INTEGER,
+                                            description="Required for brightness; 0-100"),
+                },
+                required=["action"],
+            ),
+        ))
     if cfg.spotify_enabled:
         declarations.extend(_spotify_declarations())
 
@@ -998,6 +1020,15 @@ class LiveSessionManager:
             return {"status": "camera_closed"}
         if call.name in _ALARM_TOOLS:
             return await self._run_alarm_tool(call.name, dict(call.args or {}))
+        if call.name == "govee_control":
+            handler = getattr(self.sink, "govee_control", None)
+            if not self.cfg.govee_enabled or handler is None:
+                return {"error": "Govee lights are not enabled."}
+            try:
+                return await handler(**dict(call.args or {}))
+            except Exception as exc:
+                log.exception("Govee voice tool failed")
+                return {"error": str(exc)}
         if call.name in _SPOTIFY_TOOLS:
             return await self._run_spotify_tool(call.name, dict(call.args or {}))
 

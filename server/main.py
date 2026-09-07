@@ -43,6 +43,7 @@ from protocol import (  # noqa: E402
     SeqCounter,
     UiState,
 )
+from govee import GoveeHub
 from spotify import (  # noqa: E402
     ALARM_HOLD,
     ALARM_HOLD_MAX_S,
@@ -209,6 +210,7 @@ class Hub:
             if cfg.spotify_enabled
             else None
         )
+        self.govee = GoveeHub(cfg.govee_devices) if cfg.govee_enabled else None
         self.session = LiveSessionManager(cfg, self)
         # Decoration for the home screen, on its own background task. Nothing
         # in the voice path awaits it, and a failed fetch is logged and dropped
@@ -222,6 +224,25 @@ class Hub:
         self._recorder: Any = None
         if cfg.record_audio_dir:
             self._recorder = _AudioRecorder(Path(cfg.record_audio_dir))
+
+    async def govee_control(
+        self, action: str, red: int | None = None, green: int | None = None,
+        blue: int | None = None, percent: int | None = None,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        """Voice control; omitted target broadcasts to every configured strip."""
+        if self.govee is None:
+            return {"error": "Govee lights are not enabled."}
+        try:
+            if action in ("on", "off"):
+                return await self.govee.set_power(action == "on", target)
+            if action == "color":
+                return await self.govee.set_color(red, green, blue, target)
+            if action == "brightness":
+                return await self.govee.set_brightness(percent, target)
+            return {"error": f"Unknown Govee action: {action}"}
+        except (ValueError, TypeError) as exc:
+            return {"error": str(exc)}
 
     # --- link management --------------------------------------------------
 
