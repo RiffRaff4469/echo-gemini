@@ -44,7 +44,7 @@ PROTOCOL_VERSION = 1
 # v1.0 peer stays compatible: it simply never sends or understands the new
 # types, and both sides ignore what they do not recognise. ``hello`` and
 # ``welcome`` announce it so each end can log the skew.
-PROTOCOL_MINOR = 5
+PROTOCOL_MINOR = 6
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
@@ -104,6 +104,7 @@ class MsgType(str, Enum):
     TAP = "tap"
     STOP = "stop"  # v1.4
     STAY = "stay"  # v1.3, superseded by STOP -- decoded, then treated as one
+    BUTTON = "button"  # v1.6: physical mic button, classified by the device
     CAMERA_STATUS = "camera_status"
     DEVICE_LOG = "device_log"
     ERROR = "error"
@@ -123,6 +124,7 @@ class MsgType(str, Enum):
     ALARM_COMMAND = "alarm_command"  # v1.1
     WEATHER = "weather"  # v1.2
     SESSION_QUIET = "session_quiet"  # v1.3
+    MUTE = "mute"  # v1.6: voice-initiated mute (server -> device)
 
 
 class UiState(str, Enum):
@@ -516,6 +518,43 @@ class Stay(Message):
 
     def fields(self) -> dict[str, Any]:
         return {}
+
+
+@dataclass
+class Button(Message):
+    """Physical mic button press, classified by the device (v1.6).
+
+    The device is the only end that can time the press, so it measures the
+    duration and sends the *semantic* action. ``talk_toggle`` is a short press
+    (< 700 ms): start a session when idle, end it when one is active, unmute
+    and start when muted. ``mute`` is a hold (>= 1 s): flip the privacy mute.
+    The server is deliberately not in the key-timing loop.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.BUTTON
+
+    action: str = "talk_toggle"  # "talk_toggle" | "mute"
+
+    def fields(self) -> dict[str, Any]:
+        return {"action": self.action}
+
+
+@dataclass
+class Mute(Message):
+    """Voice-initiated privacy mute (server -> device, v1.6).
+
+    Carries the full state, never a toggle: ``on`` is what the server wants
+    the device to end up in. The device owns the mute state (it works with
+    the PC off), so this asks it to apply the transition -- the device's
+    reply arrives as a ``button mute`` action on the next state flip.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.MUTE
+
+    on: bool = True
+
+    def fields(self) -> dict[str, Any]:
+        return {"on": self.on}
 
 
 @dataclass
@@ -956,6 +995,8 @@ for _cls in (
     AlarmCommand,
     AlarmStateMsg,
     AlarmFired,
+    Button,
+    Mute,
 ):
     _register(_cls)
 
@@ -1012,6 +1053,15 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
         return Stop(ts=ts)
     if cls is Stay:
         return Stay(ts=ts)
+    if cls is Button:
+        action = str(data.get("action", "talk_toggle"))
+        if action not in ("talk_toggle", "mute"):
+            raise ProtocolError(
+                f"button.action must be talk_toggle or mute (got {action!r})"
+            )
+        return Button(action=action, ts=ts)
+    if cls is Mute:
+        return Mute(on=bool(data.get("on", True)), ts=ts)
     if cls is MediaControl:
         try:
             action = MediaAction(data.get("action"))
