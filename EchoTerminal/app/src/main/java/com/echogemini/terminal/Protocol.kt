@@ -96,6 +96,7 @@ object Protocol {
         const val ALARM_COMMAND = "alarm_command"
         const val ALARM_STATE = "alarm_state"
         const val ALARM_FIRED = "alarm_fired"
+        const val STOPWATCH_STATE = "stopwatch_state"  // v1.6, device -> server
         const val WEATHER = "weather"
         const val SESSION_QUIET = "session_quiet"
     }

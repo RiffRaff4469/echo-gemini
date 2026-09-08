@@ -15,9 +15,11 @@ import android.os.IBinder
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** Survives activity recreation; only runs while a countdown or ringing needs it. */
+/** Survives activity recreation; only runs while a countdown, ring, or the
+ *  running stopwatch needs it. */
 class AlarmService : Service() {
     private lateinit var scheduler: AlarmScheduler
+    private lateinit var stopwatch: Stopwatch
     private var chime: AudioTrack? = null
     private var showingRing = false
 
@@ -30,6 +32,8 @@ class AlarmService : Service() {
         scheduler = AlarmScheduler.get(this)
         scheduler.onServiceChanged = { update() }
         scheduler.restore()
+        stopwatch = Stopwatch.get(this)
+        stopwatch.onServiceChanged = { update() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,7 +59,8 @@ class AlarmService : Service() {
             getSystemService(NotificationManager::class.java).notify(17, notification(ring))
             showingRing = ring
         }
-        if (!scheduler.needsService) stopSelf()
+        val anythingNeedsUs = scheduler.needsService || stopwatch.running
+        if (!anythingNeedsUs) stopSelf()
     }
 
     private fun startChime() {
@@ -87,6 +92,7 @@ class AlarmService : Service() {
     private fun stopChime() { chime?.let { it.stop(); it.release() }; chime = null }
     override fun onDestroy() {
         scheduler.onServiceChanged = null
+        stopwatch.onServiceChanged = null
         stopChime()
         super.onDestroy()
     }
