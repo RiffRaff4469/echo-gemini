@@ -32,13 +32,13 @@ import org.json.JSONObject
  *
  * ## The bridge, and what is deliberately not on it
  *
- * JS can call exactly five things: [tap], [openAlarm], [openTimer], [media] and
- * [log]. There is no shell, no file access, no link handle and no way to
- * send an arbitrary control message -- [media] takes one of five fixed action
- * words and anything else is dropped here rather than forwarded. Server-pushed
- * `html` cards are rendered by the page inside a sandboxed iframe with no
- * `allow-same-origin`, so a pushed `<script>` gets an opaque origin and cannot
- * see this object at all.
+ * JS can call exactly six things: [tap], [openAlarm], [openTimer],
+ * [openStopwatch], [media] and [log]. There is no shell, no file access, no
+ * link handle and no way to send an arbitrary control message -- [media]
+ * takes one of five fixed action words and anything else is dropped here
+ * rather than forwarded. Server-pushed `html` cards are rendered by the page
+ * inside a sandboxed iframe with no `allow-same-origin`, so a pushed
+ * `<script>` gets an opaque origin and cannot see this object at all.
  *
  * ## Failing back
  *
@@ -215,6 +215,19 @@ class AmbientWeb private constructor(
     fun quietWindow(active: Boolean) = call("Echo.quiet($active)")
 
     fun schedule(alarms: Int, timers: Int) = call("Echo.schedule($alarms, $timers)")
+
+    /**
+     * Layout focus (v1.6, UI-BRIEF-14): home | music | chat. The page owns
+     * the templates; an unknown value falls back to home here so the JS
+     * surface only ever sees the three real foci.
+     */
+    fun layout(focus: String) {
+        val safe = if (focus == "music" || focus == "chat") focus else "home"
+        call("Echo.layout(${JSONObject.quote(safe)})")
+    }
+
+    /** Privacy-mute status (v1.6): show or hide the rail mute chip. */
+    fun mute(on: Boolean) = call("Echo.mute($on)")
 
     fun display(cmd: Protocol.DisplayCommand) = call(
         "Echo.display(${JSONObject.quote(cmd.type.wire)}, " +

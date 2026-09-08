@@ -1,17 +1,28 @@
 /*
- * The ambient UI's only script. Everything the panel shows when it is not in
- * a conversation lives here.
+ * The ambient UI's only script. Everything the panel shows lives here.
  *
- * Two directions across the bridge, and they are deliberately narrow:
+ * UI-BRIEF-14 (layout engine + owner home model, 2026-09-08): one
+ * focus-driven layout. `layout {focus: home|music|chat}` messages from the
+ * server pick the template; the home engine (clock hero 65% + widget rail
+ * 35%) is the resting surface and the clock NEVER rotates away. Detail pages
+ * (weather, world clock, ...) open over the home from rail tiles and close
+ * back to it. A conversation uses the chat template (overlay + compact
+ * corner clock + pill/ring + answer cards). Music does NOT displace the
+ * home: now playing renders as a rail chip while idle, and as the hero card
+ * only inside a conversation.
+ *
+ * Two directions across the bridge, deliberately narrow:
  *
  *   native -> JS   window.Echo.{linkState,uiState,weather,quiet,schedule,
- *                               display,displayClear,pageData}
- *   JS -> native   window.EchoNative.{tap,openAlarm,openTimer,media,log}
+ *                               stopwatch,layout,mute,display,displayClear,
+ *                               pageData}
+ *   JS -> native   window.EchoNative.{tap,openAlarm,openTimer,openStopwatch,
+ *                                     media,log}
  *
  * The JS side owns no state the app cannot rebuild: if the WebView is torn
  * down and reloaded, MainActivity replays the last link state, ui state,
- * weather reading and schedule counts. Nothing here talks to the network --
- * the device has none.
+ * weather reading, schedule counts, mute state and layout focus. Nothing
+ * here talks to the network -- the device has none.
  */
 (function () {
   'use strict';
@@ -33,104 +44,77 @@
   function escapeHtml(raw) {
     return String(raw)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  // ----------------------------------------------------------------- pages
-  var PAGES = [
-    { id: 'home',    label: 'Home',        always: true },
-    { id: 'weather', label: 'Weather',     always: true },
-    { id: 'world',   label: 'World Clock', always: true },
-    { id: 'scores',  label: 'Scores' },
-    { id: 'flights', label: 'Overhead' },
-    { id: 'news',    label: 'News' },
-    { id: 'stocks',  label: 'Markets' }
-  ];
+  // ------------------------------------------------------- layout engine
+  // The server owns the focus (protocol v1.6 layout message): home is the
+  // resting surface, chat while a session runs, music while the display's
+  // speaker card is up. Music still renders as the home template -- the
+  // now-playing chip -- never as a takeover (owner home model spec).
+  // Detail pages (weather/world/...) are pure local navigation on top.
+  var PAGE_LABELS = {
+    home: 'Home', weather: 'Weather', world: 'World Clock',
+    scores: 'Scores', flights: 'Overhead', news: 'News', stocks: 'Markets'
+  };
+  var FULL_PAGES = ['weather', 'world', 'scores', 'flights', 'news', 'stocks'];
 
-  var CYCLE_MS = 15000;   // how long each page holds during the idle cycle
-  var PIN_MS = 60000;     // how long a hand-picked page stays picked
-
-  var current = 0;
-  var cycleDueAt = 0;
-  var pinnedUntil = 0;
   var uiState = 'idle';
-  var cardShowing = false;
+  var focus = 'home';          // last server layout focus (sanitized)
+  var current = 'home';        // the .page currently shown underneath overlays
 
-  var pager = $('pager');
-  PAGES.forEach(function (p, i) {
-    var d = document.createElement('div');
-    d.className = 'pdot' + (i === 0 ? ' on' : '');
-    d.setAttribute('data-ui', '');
-    d.addEventListener('click', function () { pin(i); });
-    pager.appendChild(d);
-  });
-
-  /** A page joins the cycle only once it has something true to show. */
-  function eligible(i) {
-    return PAGES[i].always === true || PAGES[i].hasData === true;
-  }
-
-  function goTo(i) {
-    current = i;
-    var id = PAGES[i].id;
+  function openPage(id) {
+    if (!PAGE_LABELS[id]) id = 'home';
+    current = id;
     var pages = document.querySelectorAll('.page');
     for (var k = 0; k < pages.length; k++) {
       pages[k].classList.toggle('visible', pages[k].dataset.page === id);
     }
-    var dots = pager.children;
-    for (var d = 0; d < dots.length; d++) {
-      dots[d].classList.toggle('on', d === i);
-    }
-    $('page-label').textContent = PAGES[i].label;
+    $('page-label').textContent = PAGE_LABELS[id];
+    $('page-back').classList.toggle('hidden', id === 'home');
     if (id === 'world') drawWorld();
   }
 
-  function pin(i) {
-    pinnedUntil = Date.now() + PIN_MS;
-    cycleDueAt = pinnedUntil;
-    for (var d = 0; d < pager.children.length; d++) {
-      pager.children[d].classList.toggle('pinned', d === i);
-    }
-    goTo(i);
+  // ---------------------------------------------------------------- focus
+  var FOCUSES = { home: 1, music: 1, chat: 1 };
+
+  /** Apply a server layout focus. Unknown values fall back to home. */
+  function applyFocus(raw) {
+    var next = FOCUSES[raw] ? raw : 'home';
+    // Guard: never take the home surface away unless a conversation is
+    // actually on screen -- the chat template is the overlay + card chrome,
+    // which only exists while uiState is non-idle.
+    if (next === 'chat' && uiState === 'idle') return;
+    if (next === focus) return;
+    focus = next;
+    var cls = document.body.classList;
+    cls.remove('fx-home', 'fx-music', 'fx-chat');
+    cls.add('fx-' + focus);
   }
 
-  function advance() {
-    for (var step = 1; step <= PAGES.length; step++) {
-      var next = (current + step) % PAGES.length;
-      if (eligible(next)) { goTo(next); return; }
-    }
-  }
-
-  function cycleTick(now) {
-    if (uiState !== 'idle' || cardShowing) return;
-    if (now < pinnedUntil) return;
-    if (pinnedUntil) {
-      pinnedUntil = 0;
-      for (var d = 0; d < pager.children.length; d++) {
-        pager.children[d].classList.remove('pinned');
-      }
-    }
-    if (now >= cycleDueAt) {
-      advance();
-      cycleDueAt = now + CYCLE_MS;
-    }
-  }
-
-  // ----------------------------------------------------------------- clock
+  // ---------------------------------------------------------------- clock
   var MONTHS = ['January','February','March','April','May','June','July',
                 'August','September','October','November','December'];
   var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var DAYS_S = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
 
   function drawClock(now) {
     var h24 = now.getHours();
     var h12 = h24 % 12; if (h12 === 0) h12 = 12;
+    var ap = h24 >= 12 ? 'PM' : 'AM';
+    // Big hero clock (home template).
     $('time-digital').innerHTML =
       h12 + '<span class="colon">:</span>' + pad(now.getMinutes()) +
-      '<span class="ampm">' + (h24 >= 12 ? 'PM' : 'AM') + '</span>';
+      '<span class="ampm">' + ap + '</span>';
     $('date-digital').textContent =
       DAYS[now.getDay()] + ', ' + MONTHS[now.getMonth()] + ' ' + now.getDate();
+    // Compact clock (chat template corner block).
+    $('time-mini').textContent = h12 + ':' + pad(now.getMinutes()) + ' ' + ap;
+    $('date-mini').textContent =
+      DAYS_S[now.getDay()] + ' &middot; ' + MONTHS_S[now.getMonth()] + ' ' + now.getDate();
   }
 
   // --------------------------------------------------------- world clock
@@ -142,6 +126,8 @@
     { name: 'Geneva',    tz: 'Europe/Zurich',    lat: 46.20, lon: 6.14 }
   ];
   var HERO = CITIES.filter(function (c) { return c.hero; })[0] || CITIES[0];
+
+  function cityCode(c) { return c.name.slice(0, 3).toUpperCase(); }
 
   function cityTime(city, now) {
     try {
@@ -165,12 +151,19 @@
   }
 
   var cityListEl = $('city-list');
+  var railCitiesEl = $('rail-cities');
   CITIES.forEach(function (c) {
     var card = document.createElement('div');
     card.className = 'city-card';
     card.innerHTML = '<div class="cname">' + escapeHtml(c.name) + '</div>' +
                      '<div class="ctime">--:--</div><div class="cbadge"></div>';
     cityListEl.appendChild(card);
+    // Compact one-liner for the home rail: "SYR   9:41 PM".
+    var row = document.createElement('span');
+    row.className = 'wc-row';
+    row.innerHTML = '<span class="wc-code">' + cityCode(c) + '</span>' +
+                    '<span class="wc-time">--:--</span>';
+    railCitiesEl.appendChild(row);
   });
 
   function drawCities(now) {
@@ -182,6 +175,13 @@
     $('hero-name').textContent = HERO.name.toUpperCase();
     $('hero-time').textContent = cityTime(HERO, now);
     $('hero-date').textContent = DAYS[now.getDay()] + ', ' + MONTHS[now.getMonth()] + ' ' + now.getDate();
+  }
+
+  function drawRailCities(now) {
+    for (var i = 0; i < CITIES.length; i++) {
+      var row = railCitiesEl.children[i];
+      row.children[1].textContent = cityTime(CITIES[i], now);
+    }
   }
 
   var worldDrawnAt = 0;
@@ -237,7 +237,6 @@
         '<line x1="4.2" y1="19.8" x2="5.9" y2="18.1"/><line x1="18.1" y1="5.9" x2="19.8" y2="4.2"/></g>'
       : '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a7.5 7.5 0 1 0 10.5 10.5z" fill="' + A + '"/>';
     var cloud = '<path d="M7.5 19h9a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7.5 19z" fill="' + G + '"/>';
-
     if (cond === 'clear') body = sunOrMoon;
     else if (cond === 'partly') body = '<g transform="translate(-2,-3) scale(0.8)">' + sunOrMoon + '</g>' + cloud;
     else if (cond === 'cloud') body = cloud;
@@ -273,10 +272,11 @@
   }
 
   // ------------------------------------------------------- pushed cards
-  // The same five display types PushSurface renders natively, with the same
+  // The same display types PushSurface renders natively, with the same
   // priority and duration rules, so the server sees no behaviour change.
   var cardEl = $('card');
   var cardBody = $('card-body');
+  var cardShowing = false;
   var cardPriority = -1e9;
   var cardExpiry = null;
   var cardTimer = null;
@@ -302,15 +302,16 @@
   }
 
   // --------------------------------------------------- now playing (v1.5)
-  // Laid out across the panel rather than stacked: 960x480 is wide, and the
-  // stacked version left the transport row either off the bottom or too small
-  // to hit. Buttons are >=64 px because they are pressed with a thumb, in the
-  // dark, by someone who is not looking closely.
+  // The full card is the CHAT-hero form of now playing: it renders only while
+  // a conversation is on screen (and during idle it is instead a compact
+  // rail chip -- music never displaces the home, owner home model spec).
+  // Buttons are >=64 px because they are pressed with a thumb, in the dark,
+  // by someone who is not looking closely.
   //
   // Nothing here is optimistic. Pressing pause sends `pause` and changes
-  // nothing on screen; the card redraws when the server's next now_playing push
-  // says the player actually stopped. The player is on the PC and it is the
-  // only thing that knows.
+  // nothing on screen; the card redraws when the server's next now_playing
+  // push says the player actually stopped. The player is on the PC and it is
+  // the only thing that knows.
   var ICONS = {
     previous: '<path d="M4.5 5h2.5v14H4.5zM20 5v14L9 12z"/>',
     next: '<path d="M17 5h2.5v14H17zM4 5v14l11-7z"/>',
@@ -329,7 +330,7 @@
 
   /** Identity of the track on screen, so a re-push updates instead of reloading. */
   function nowPlayingKey(p) {
-    return (p.title || '') + ' ' + (p.artist || '');
+    return (p.title || '') + '\u0000' + (p.artist || '');
   }
 
   function nowPlayingCard(p) {
@@ -390,6 +391,41 @@
     }, 1000);
   }
 
+  // ------------------------------------------------------ rail np chip
+  // The home-model form of now playing: one clipped "title — artist" line
+  // with an equaliser dot. Kept in sync by every now_playing push, shown
+  // only while the speaker card is up, hidden by display_clear.
+  var npChipEl = $('np-chip');
+  var npChipText = $('np-chip-text');
+
+  function applyRailNp(p) {
+    npChipText.textContent =
+      '\u266A ' + [p.title, p.artist].filter(Boolean).join(' \u2014 ') || '\u266A';
+    npChipEl.classList.toggle('paused', p.is_playing === false);
+    npChipEl.classList.remove('hidden');
+  }
+
+  function hideRailNp() {
+    npChipEl.classList.add('hidden');
+    npChipText.textContent = '\u266A';
+  }
+
+  /** Drop a now-playing overlay card (chat hero) back to its rail chip. */
+  function collapseNpOverlay() {
+    if (!cardShowing) return;
+    clearCardTimers();
+    cardShowing = false;
+    cardPriority = -1e9;
+    cardType = null;
+    cardKey = null;
+    cardEl.classList.remove('shown');
+    setTimeout(function () {
+      if (cardShowing) return;
+      cardEl.classList.add('hidden');
+      cardBody.innerHTML = '';   // let the pushed page go, RAM is not free
+    }, 340);
+  }
+
   function startCountdown(seconds) {
     var left = Math.max(0, Math.round(seconds || 0));
     var el = $('card-count');
@@ -414,6 +450,19 @@
 
   function showCard(type, payload, durationMs, priority) {
     if (cardShowing && priority < cardPriority) return;
+
+    // A now_playing push always updates the home rail chip -- the chip is
+    // the resting form of the music state (owner home model). While a
+    // conversation is on screen the full card is the hero (chat template);
+    // while idle the chip is ALL the music gets, so return without touching
+    // the overlay: music does not displace the home.
+    if (type === 'now_playing') {
+      applyRailNp(payload);
+      if (uiState === 'idle') {
+        if (cardShowing && cardType === 'now_playing') collapseNpOverlay();
+        return;
+      }
+    }
 
     // A playing track is re-pushed every few seconds so the bar can move.
     // Re-rendering the card for that would reload the album art and restart
@@ -475,7 +524,8 @@
       cardEl.classList.add('hidden');
       cardBody.innerHTML = '';   // let the pushed page go, RAM is not free
     }, 340);
-    cycleDueAt = Date.now() + CYCLE_MS;
+    // A cleared speaker card means the music state is gone too.
+    hideRailNp();
   }
 
   // ------------------------------------------------------ conversation
@@ -490,54 +540,79 @@
     document.documentElement.style.setProperty('--state', STATE_COLOR[state] || STATE_COLOR.idle);
     $('ring').classList.toggle('active', state === 'listening');
     $('convo').classList.toggle('hidden', !conversing);
-    pager.classList.toggle('hidden', conversing);
     if (conversing) {
+      // The home is the resting surface: a conversation returns to it the
+      // instant it ends, so park any open detail page underneath the chat
+      // template now rather than revealing it later (owner home model).
+      openPage('home');
+      if (!document.body.classList.contains('fx-chat')) applyFocus('chat');
       $('convo-label').textContent = STATE_LABEL[state] || '';
     } else {
       $('convo-hint').classList.add('hidden');
-      cycleDueAt = Date.now() + CYCLE_MS;
+      // If the conversation hero was the now-playing card, fold it back into
+      // the rail chip -- music stays on the home, never as a takeover.
+      if (cardType === 'now_playing' && cardShowing) collapseNpOverlay();
+      // Optimistic return to the engine; the server's layout push corrects
+      // to music when the speaker card is still up.
+      if (document.body.classList.contains('fx-chat')) applyFocus('home');
       tick();          // the clock was parked; catch it up before it is seen
     }
     schedulePump();
   }
 
   // ---------------------------------------------------------------- pump
-  // One timer for the whole UI. It stops entirely during a conversation:
-  // nothing behind the overlay is visible, so ticking it is pure battery and
-  // pure CPU contention with the audio path.
+  // One timer for the whole idle UI. It stops entirely during a conversation:
+  // nothing behind the overlay needs per-second redraws, and ticking is pure
+  // CPU contention with the audio path. The compact chat clock still moves,
+  // on a slow 15 s cadence so a long session never shows a frozen time.
   var pump = null;
 
   function schedulePump() {
     if (pump) { clearInterval(pump); pump = null; }
-    if (uiState === 'idle') pump = setInterval(tick, 1000);
+    if (uiState === 'idle') {
+      pump = setInterval(tick, 1000);
+    } else {
+      pump = setInterval(function () { drawClock(new Date()); }, 15000);
+    }
   }
 
+  var lastRailMin = -1;
   function tick() {
     var now = new Date();
     drawClock(now);
-    if (PAGES[current].id === 'world') drawWorld();
-    cycleTick(now.getTime());
+    if (current === 'world') drawWorld();
+    if (current === 'home' && now.getMinutes() !== lastRailMin) {
+      lastRailMin = now.getMinutes();
+      drawRailCities(now);
+    }
   }
 
   // ----------------------------------------------------------------- taps
   // A tap anywhere goes to the host, exactly as it did when the ambient screen
-  // was a Canvas and MainActivity.onTouchEvent saw every touch. What it means
-  // -- open a session, or end the one on screen -- is decided there and not
-  // here. Page controls mark themselves data-ui and are excluded; that is the
-  // "unless a page interaction consumed it" half of the rule. The conversation
-  // hint is deliberately NOT one of them: it is a label, and tapping it is a
-  // tap like any other.
+  // was a Canvas and MainActivity.onTouchEvent saw every touch. Since brief 7
+  // v2 what it means -- open a session, or end the one on screen -- is decided
+  // there and not here: a blank tap starts nothing (screen = UI only). UI
+  // controls mark themselves data-ui and are excluded; that is the "unless a
+  // page interaction consumed it" half of the rule.
   document.addEventListener('click', function (e) {
     if (e.target.closest('[data-ui]')) return;
     NATIVE.tap();
   });
+
+  // Rail tiles with data-open navigate to their full page locally (no server
+  // round trip, no session); the chips below open the native schedule pages.
+  document.addEventListener('click', function (e) {
+    var tile = e.target.closest('[data-open]');
+    if (tile) { openPage(tile.getAttribute('data-open')); return; }
+  });
+  $('page-back').addEventListener('click', function () { openPage('home'); });
   $('alarm-chip').addEventListener('click', function () { NATIVE.openAlarm(); });
   $('timer-chip').addEventListener('click', function () { NATIVE.openTimer(); });
   $('stopwatch-chip').addEventListener('click', function () { NATIVE.openStopwatch(); });
 
-  // The now-playing transport row. Its buttons carry data-ui, so the handler
-  // above has already declined to treat the press as a tap-to-talk -- pressing
-  // pause must not also open a conversation.
+  // The now-playing transport row (chat-hero card only). Its buttons carry
+  // data-ui, so the handler above has already declined to treat the press as
+  // a tap-to-talk -- pressing pause must not also open a conversation.
   cardBody.addEventListener('click', function (e) {
     var button = e.target.closest('[data-media]');
     if (!button) return;
@@ -564,20 +639,32 @@
       }
     },
 
-    /** The post-answer quiet window: shows the "tap to stop" hint. */
+    /** The post-answer quiet window: shows the "press mic to stop" hint. */
     quiet: function (active) {
       $('convo-hint').classList.toggle('hidden', !active);
     },
 
-    /** Alarm and timer counts, for the two home chips. */
+    /** Alarm and timer counts, for the two suite chips. */
     schedule: function (alarms, timers) {
       $('alarm-chip').innerHTML = 'Alarms &middot; ' + alarms;
       $('timer-chip').innerHTML = 'Timers &middot; ' + timers;
     },
 
-    /** Stopwatch mirror for the home chip (v1.6). */
+    /** Stopwatch mirror for the suite chip (v1.6). */
     stopwatch: function (running, text) {
       $('stopwatch-chip').innerHTML = running ? 'Stopwatch &middot; ' + text : 'Stopwatch';
+    },
+
+    /**
+     * Layout focus (protocol v1.6, UI-BRIEF-14): home | music | chat.
+     * home/music render the 65/35 engine; chat renders the conversation
+     * template. Unknown foci fall back to home.
+     */
+    layout: function (raw) { applyFocus(raw); },
+
+    /** Privacy mute state (HARDWARE-BRIEF-7 v2): show the rail chip. */
+    mute: function (on) {
+      $('mute-chip').classList.toggle('hidden', !on);
     },
 
     display: function (type, payloadJson, durationMs, priority) {
@@ -592,9 +679,10 @@
 
     /**
      * Rows for the pages that have no source yet (BRIEF-10). Until one
-     * arrives the page keeps its placeholder state and is skipped by the idle
-     * cycle -- an ambient screen that shows fake scores is worse than one
-     * that admits it has none.
+     * arrives the page keeps its placeholder state -- an ambient screen that
+     * shows fake scores is worse than one that admits it has none. Data
+     * pages are opened from future rail tiles (the gallery brief); they are
+     * not cycled, because the clock never leaves the home.
      */
     pageData: function (page, json) {
       try {
@@ -602,9 +690,6 @@
         var handler = PAGE_BINDERS[page];
         if (!handler) { NATIVE.log('no binder for page ' + page); return; }
         handler(data);
-        for (var i = 0; i < PAGES.length; i++) {
-          if (PAGES[i].id === page) PAGES[i].hasData = true;
-        }
       } catch (e) {
         NATIVE.log('bad pageData for ' + page + ': ' + e);
       }
@@ -696,8 +781,8 @@
   } catch (e) {
     NATIVE.log('world map init failed: ' + e);
   }
-  goTo(0);
-  cycleDueAt = Date.now() + CYCLE_MS;
+  applyFocus('home');   // body already starts fx-home; keeps the invariant
+  openPage('home');
   tick();
   schedulePump();
   if (window.EchoNative && window.EchoNative.ready) window.EchoNative.ready();

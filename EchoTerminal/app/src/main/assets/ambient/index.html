@@ -8,12 +8,19 @@
   mockup's numbers port across unchanged. user-scalable=no also removes the
   300ms tap delay (screen taps drive UI only since protocol v1.6; the wake
   word and the physical mic button start conversations).
+
+  UI-BRIEF-14 (layout engine, home model owner spec): one focus-driven
+  layout. The resting surface is the 65/35 Nest-Hub home -- clock hero left,
+  widget rail right. The clock never rotates away; only the rail's widgets
+  change. Full-screen pages (weather, world clock, ...) open OVER the home
+  when their rail card is tapped and close back to it; a conversation puts
+  the screen into the chat template (overlay + compact clock + answer cards).
 -->
 <meta name="viewport" content="width=960, user-scalable=no">
 <title>Echo ambient</title>
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="fx-home">
 
 <!-- The listening ring frames the whole panel, the way the Alexa light ring
      frames the base. Pure CSS animation, no JS loop. -->
@@ -24,32 +31,69 @@
   <span id="page-label">Home</span>
 </div>
 
-<!-- ---------------------------------------------------------------- HOME -->
+<!-- ============================================================ ENGINE ==
+     The single focus-driven layout. `data-focus` on <body> picks the active
+     template: home (clock hero + rail, the resting surface), music (the
+     same home -- now-playing is a rail chip, never a takeover, per the home
+     model spec), chat (the conversation overlay, driven by ui state). -->
 <section class="page visible" data-page="home">
   <div class="home">
+
+    <!-- Left 65%: the clock hero. The one thing that never leaves the home. -->
     <div class="clock-stage">
       <div class="face digital">
         <div class="time" id="time-digital"></div>
         <div class="date" id="date-digital"></div>
       </div>
     </div>
-    <div class="home-footer">
-      <div class="weather-mini">
+
+    <!-- Right 35%: the widget rail. Every tile here is a >= 40 px thumb
+         target. Cards with data-open navigate to their full page locally;
+         the chips open the native schedule screens. -->
+    <aside class="rail">
+      <button class="rail-card rail-weather" data-ui data-open="weather" aria-label="Weather">
         <span class="wico" id="home-wico"></span>
-        <div>
-          <div class="wtemp" id="home-wtemp">--&deg;</div>
-          <div class="wcond" id="home-wcond">No weather yet</div>
-        </div>
-      </div>
-      <div class="footer-right">
-        <span class="hint" id="home-hint">say hey jarvis · press mic</span>
+        <span class="rail-wx">
+          <span class="wtemp" id="home-wtemp">--&deg;</span>
+          <span class="wcond" id="home-wcond">No weather yet</span>
+        </span>
+        <span class="rail-go" aria-hidden="true">&#8250;</span>
+      </button>
+
+      <button class="rail-card rail-world" data-ui data-open="world" aria-label="World clock">
+        <span class="rail-world-label">World clock</span>
+        <span class="rail-world-cities" id="rail-cities"></span>
+        <span class="rail-go" aria-hidden="true">&#8250;</span>
+      </button>
+
+      <div class="suite">
         <button class="chip" data-ui id="alarm-chip">Alarms &middot; 0</button>
         <button class="chip" data-ui id="timer-chip">Timers &middot; 0</button>
         <button class="chip" data-ui id="stopwatch-chip">Stopwatch</button>
       </div>
-    </div>
+
+      <!-- Now playing as a compact rail chip (home model: music never
+           displaces the home). Shown only while the display's speaker is
+           active; hidden by display_clear. -->
+      <div id="np-chip" class="chip np-chip hidden">
+        <span class="np-eq" aria-hidden="true"></span>
+        <span class="np-text" id="np-chip-text">&#9835;</span>
+      </div>
+
+      <!-- Privacy mute is device-owned (HARDWARE-BRIEF-7 v2); this chip is
+           a status readout only, and is hidden while unmuted. -->
+      <div id="mute-chip" class="chip mute-chip hidden"><span class="mute-dot"></span>Mic muted</div>
+
+      <div class="hint" id="home-hint">say hey jarvis &middot; press mic</div>
+    </aside>
   </div>
 </section>
+
+<!-- ======================================================= FULL PAGES ==
+     The detail pages. They open over the home when their rail card is
+     tapped and are pure local navigation: no server round trip, no session.
+     A conversation always returns the screen to the home underneath it. -->
+<button id="page-back" class="back-chip hidden" data-ui aria-label="Back to home">&#8249; Home</button>
 
 <!-- ------------------------------------------------------------- WEATHER -->
 <section class="page" data-page="weather">
@@ -161,11 +205,15 @@
   </div>
 </section>
 
-<div id="pager"></div>
-
-<!-- The conversation overlay. Shown for any non-idle ui state; hides the
-     pager and stops the idle cycle. -->
+<!-- ============================================================= CHAT ==
+     The chat template (non-idle focus). The clock compresses to a compact
+     corner block; the ring and pill are the listening/thinking/speaking
+     visuals; pushed answer cards (id=card) are the hero above this. -->
 <div id="convo" class="hidden">
+  <div class="chat-clock">
+    <div class="time" id="time-mini"></div>
+    <div class="date" id="date-mini"></div>
+  </div>
   <div class="convo-pill"><span class="convo-dot"></span><span id="convo-label">Listening</span></div>
   <div id="convo-hint" class="hidden">press mic to stop</div>
 </div>

@@ -34,8 +34,9 @@ object Protocol {
     // post-answer quiet window (`session_quiet` down, `stay` up); v1.4 replaces
     // `stay` with `stop` -- a tap during a session now ENDS it; v1.5 adds music
     // (`Channel.AUDIO_MUSIC` down, `media_control` up) for Spotify; v1.6 adds
-    // the physical mic button (`button` up, `mute` down) and retires screen
-    // taps as session controls.
+    // the physical mic button (`button` up, `mute` down), retires screen taps
+    // as session controls, and adds the focus-driven layout engine (`layout`
+    // down, UI-BRIEF-14).
     const val MINOR = 6
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
@@ -99,6 +100,7 @@ object Protocol {
         const val STOPWATCH_STATE = "stopwatch_state"  // v1.6, device -> server
         const val WEATHER = "weather"
         const val SESSION_QUIET = "session_quiet"
+        const val LAYOUT = "layout"  // v1.6, UI-BRIEF-14 (server -> device)
     }
 
     /** Server-driven UI state. */

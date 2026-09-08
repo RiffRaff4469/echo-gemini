@@ -1,12 +1,18 @@
 /*
  * Ambient UI for the Echo Show 5 panel (960x480), ported from
- * docs/ui-mockup/mockup.html. The device chrome (bezel, fabric, camera dot)
- * is gone -- this IS the screen now -- and the pagination dots moved from the
- * mockup's fabric base onto the screen's bottom edge, since the physical base
- * is not ours to draw on.
+ * docs/ui-mockup/mockup.html, rebuilt for the UI-BRIEF-14 layout engine.
+ * The device chrome (bezel, fabric, camera dot) is gone -- this IS the
+ * screen now.
  *
- * Everything here is local: the two fonts are bundled in fonts/, and there is
- * no network reference of any kind. The device has no internet.
+ * Focus model (owner home spec, 2026-09-08): the resting surface is the
+ * 65/35 Nest-Hub home -- clock hero left, widget rail right. The clock
+ * NEVER rotates away; only rail widgets change. Detail pages open OVER the
+ * home and close back to it. A conversation (fx-chat) replaces the home
+ * with the chat template: compact corner clock + pill + ring + answer cards.
+ * Music does not displace the home: now-playing is a rail chip.
+ *
+ * Everything here is local: the two fonts are bundled in fonts/, and there
+ * is no network reference of any kind. The device has no internet.
  */
 
 @font-face {
@@ -86,63 +92,143 @@ html,body{
 .dot.offline{ background:var(--red); box-shadow:0 0 7px rgba(255,92,92,0.9); }
 
 /* ---------------------------------------------------------------- pages --- */
+/* Full-bleed layout templates, one visible at a time. The home engine is
+   page[data-page=home]; everything else is a detail page that opens over
+   it from a rail card and closes back. Fades use opacity only -- the only
+   cheap animation on a 1 GB, 32-bit WebView. */
 .page{
   position:fixed; top:0; right:0; bottom:0; left:0; z-index:10;
   display:none; flex-direction:column;
-  padding:34px 26px 30px 26px;
+  padding:30px 26px 26px 26px;
 }
-.page.visible{ display:flex; }
+.page.visible{ display:flex; animation: page-in .22s ease; }
+@keyframes page-in{ from{ opacity:0; } to{ opacity:1; } }
 
-#pager{
-  position:fixed; left:0; right:0; bottom:2px; z-index:20;
-  height:28px; display:flex; align-items:center; justify-content:center; gap:2px;
-}
-/* The dot is 6px because that is what reads right from across a room; the
-   box around it is 26px because that is what a thumb hits. Drawing the dot
-   as ::before is what lets the two sizes disagree. */
-.pdot{ width:26px; height:26px; display:flex; align-items:center; justify-content:center; }
-.pdot::before{
-  content:''; width:6px; height:6px; border-radius:50%;
-  background:rgba(255,255,255,0.22);
-  transition: background .2s, transform .2s;
-}
-.pdot.on::before{ background:var(--blue); transform:scale(1.35); }
-/* A pinned page is one the user chose; it says so until the cycle resumes. */
-.pdot.pinned::before{ background:var(--amber); }
-#pager.hidden{ display:none; }
+/* --------------------------------------------------- home engine (65/35) -- */
+/* Left clock hero ~65%, right widget rail ~35%. The engine IS the resting
+   surface; body.fx-chat hides it while the conversation overlay is up. */
+body.fx-chat .page[data-page="home"]{ display:none; }
+body.fx-chat #page-back{ display:none; }
 
-/* ----------------------------------------------------------- home page --- */
-.home{ flex:1; display:flex; flex-direction:column; justify-content:space-between; }
-.clock-stage{ flex:1; display:flex; align-items:center; }
-.face{ width:100%; }
+.home{
+  flex:1; display:grid; align-items:center;
+  grid-template-columns: 65fr 35fr;
+  column-gap:22px;
+  min-height:0;
+}
+.clock-stage{ display:flex; align-items:center; justify-content:center; min-width:0; }
 .face.digital .time{
   font-family:'Space Grotesk', sans-serif; font-weight:600;
   font-size:122px; line-height:.95; letter-spacing:-.01em;
   font-variant-numeric: tabular-nums;
+  white-space:nowrap;
 }
 .face.digital .time .colon{ opacity:.5; }
 .face.digital .time .ampm{ font-size:.34em; margin-left:12px; color:var(--ink-dim); font-weight:500; }
 .face.digital .date{ font-size:16px; color:var(--ink-dim); margin-top:6px; font-weight:500; }
 
-.home-footer{
-  display:flex; align-items:flex-end; justify-content:space-between;
-  padding-top:10px; border-top:1px solid var(--line);
+/* --- the widget rail ------------------------------------------------------ */
+.rail{
+  display:flex; flex-direction:column; gap:12px;
+  border-left:1px solid var(--line);
+  padding-left:18px;
+  min-width:0; height:100%;
 }
-.weather-mini{ display:flex; align-items:center; gap:10px; padding-top:12px; }
-.wico{ width:30px; height:30px; display:block; }
-.wico svg{ width:100%; height:100%; display:block; }
-.wtemp{ font-size:22px; font-weight:600; font-family:'Space Grotesk',sans-serif; }
-.wcond{ font-size:11px; color:var(--ink-dim); }
-.hint{ font-size:11px; color:var(--ink-faint); }
-.footer-right{ display:flex; align-items:center; gap:10px; padding-top:12px; }
-/* The alarm/timer chips the native ambient floated over its bottom-right
-   corner, in the same place, opening the same native schedule screens. */
+/* Every rail tile is a >= 40 px target, glass, and reads as pressable. */
+.rail-card{
+  font-family:'Inter',sans-serif; color:var(--ink); text-align:left;
+  background:var(--glass); border:1px solid var(--line); border-radius:12px;
+  padding:10px 12px; width:100%;
+  display:flex; align-items:center; gap:10px; min-height:40px;
+  -webkit-tap-highlight-color: transparent;
+}
+/* The two data cards share whatever height the status chips below do not
+   need, so the rail always fills its column -- extra tiles (np, mute) or a
+   wrapped chip row simply squeeze them instead of overflowing the screen. */
+.rail-weather, .rail-world{ flex:1 1 0; }
+.rail-card:active{ background:var(--glass-strong); }
+.rail-go{ color:var(--ink-faint); font-size:18px; margin-left:auto; line-height:1; }
+
+.rail-weather .wico{ width:32px; height:32px; flex:0 0 32px; display:block; }
+.rail-weather .wico svg{ width:100%; height:100%; display:block; }
+.rail-wx{ display:flex; flex-direction:column; min-width:0; }
+.rail-wx .wtemp{ font-family:'Space Grotesk',sans-serif; font-size:20px; font-weight:600; line-height:1.1; }
+.rail-wx .wcond{
+  font-size:11px; color:var(--ink-dim);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+.rail-world{ flex-direction:column; align-items:stretch; gap:6px; justify-content:center; }
+.rail-world-label{
+  font-size:9px; letter-spacing:.14em; color:var(--ink-faint); font-weight:600;
+}
+.rail-world-cities{ display:flex; flex-direction:column; gap:3px; }
+.wc-row{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.wc-code{
+  font-size:10px; letter-spacing:.12em; color:var(--ink-dim); font-weight:600;
+  flex:0 0 auto;
+}
+.wc-time{
+  font-family:'Space Grotesk',sans-serif; font-size:15px; font-weight:600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Clock-suite chips: alarms / timers / stopwatch open the native schedule
+   screens. They wrap when the stopwatch text grows. */
+.suite{ display:flex; flex-wrap:wrap; gap:6px; }
 .chip{
   font-family:'Inter',sans-serif; font-size:13px; color:rgba(232,238,247,0.91);
   background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
-  border-radius:11px; padding:8px 14px;
+  border-radius:11px; padding:10px 12px;
+  display:inline-flex; align-items:center; gap:8px;
+  min-height:40px;
 }
-.chip:active{ background:rgba(255,255,255,0.16); }
+button.chip:active{ background:rgba(255,255,255,0.16); }
+
+/* Now playing as a rail chip. Playing dot (the equaliser bars) on the left,
+   one clipped line of "title — artist" beside it. */
+.np-chip{ max-width:100%; }
+.np-chip.hidden{ display:none; }
+.np-eq{
+  flex:0 0 auto; width:16px; height:12px;
+  background-image:linear-gradient(var(--green), var(--green));
+  background-repeat:no-repeat;
+  background-size:3px 100%, 3px 68%, 3px 100%;
+  background-position:0 0, 50% 100%, 100% 0;
+  animation: eq-bars 1.1s ease-in-out infinite;
+}
+@keyframes eq-bars{
+  0%,100%{ opacity:.45; }
+  50%{ opacity:1; }
+}
+/* Paused: the bars stop and dim instead of pretending to be music. */
+.np-chip.paused .np-eq{ animation:none; opacity:.35; }
+.np-text{
+  font-size:12px; color:rgba(232,238,247,0.91);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;
+}
+
+/* Privacy-mute status chip: device-owned state, readout only. */
+.mute-chip{ color:rgba(255,148,148,0.95); border-color:rgba(255,92,92,0.35); }
+.mute-chip.hidden{ display:none; }
+.mute-dot{
+  flex:0 0 auto; width:8px; height:8px; border-radius:50%;
+  background:var(--red); box-shadow:0 0 6px rgba(255,92,92,0.8);
+}
+
+.hint{ font-size:11px; color:var(--ink-faint); line-height:1.3; }
+
+/* ------------------------------------------------------ back from a page -- */
+/* Detail pages close with the chip in the bottom-left corner: reachable by a
+   thumb, clear of the top bar and of the native camera pill top-right. */
+#page-back{
+  position:fixed; bottom:10px; left:26px; z-index:25;
+  font-family:'Inter',sans-serif; font-size:13px; color:var(--ink-dim);
+  background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.14);
+  border-radius:11px; padding:9px 14px; min-height:40px;
+}
+#page-back.hidden{ display:none; }
+#page-back:active{ background:rgba(255,255,255,0.16); color:var(--ink); }
 
 /* -------------------------------------------------------- weather page --- */
 .weather-page{ flex:1; display:flex; flex-direction:column; }
@@ -267,13 +353,33 @@ html,body{
   letter-spacing:.04em; padding-top:4px;
 }
 
-/* ------------------------------------------------------------ overlays --- */
+/* ------------------------------------------------------------- chat -------- */
+/* The chat template (non-idle focus). Opacity-faded so a conversation opens
+   and closes smoothly instead of snapping. Hidden keeps the overlay off the
+   hit-test path only after the fade completes. */
 #convo{
   position:fixed; top:0; right:0; bottom:0; left:0; z-index:30;
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
   background: radial-gradient(ellipse at 50% 50%, rgba(5,7,10,0.72) 0%, rgba(5,7,10,0.94) 70%);
+  opacity:1;
+  transition: opacity .3s ease;
 }
-#convo.hidden{ display:none; }
+#convo.hidden{
+  opacity:0; visibility:hidden;
+  transition: opacity .3s ease, visibility 0s linear .3s;
+}
+/* The clock during a conversation: compact, top-left, still readable, never
+   in the way of the pill or the answer cards (which overlay this). */
+.chat-clock{
+  position:absolute; top:44px; left:26px;
+  display:flex; flex-direction:column; gap:2px;
+}
+.chat-clock .time{
+  font-family:'Space Grotesk',sans-serif; font-weight:600;
+  font-size:34px; line-height:1; font-variant-numeric: tabular-nums;
+  color:var(--ink);
+}
+.chat-clock .date{ font-size:11px; color:var(--ink-dim); }
 .convo-pill{
   display:flex; align-items:center; gap:14px;
   font-size:34px; font-weight:600; letter-spacing:.01em;
@@ -288,6 +394,7 @@ html,body{
 #convo-hint{ font-size:13px; color:var(--ink-dim); transition: opacity .4s ease; }
 #convo-hint.hidden{ display:none; }
 
+/* ------------------------------------------------------ pushed cards ------ */
 #card{ position:fixed; top:0; right:0; bottom:0; left:0; z-index:35; background:#000; opacity:0; transition: opacity .32s ease; }
 #card.shown{ opacity:1; }
 #card.hidden{ display:none; }
@@ -304,10 +411,10 @@ html,body{
 .card-bar{ width:70%; height:6px; border-radius:3px; background:rgba(255,255,255,0.16); margin-top:18px; overflow:hidden; }
 .card-bar > i{ display:block; height:100%; background:var(--blue); }
 
-/* --- now playing (protocol v1.5) -----------------------------------------
-   Across the panel, not stacked. 960x480 is wide, and stacking left the
-   transport row either off the bottom edge or too small to hit; side by side
-   there is room for a 200 px cover AND buttons a thumb can find. */
+/* --- now playing OVERLAY card (protocol v1.5) ------------------------------
+   This is the CHAT-hero form of now playing (music during a conversation).
+   While idle, now playing is a rail chip (see .np-chip) and this overlay is
+   never used -- music does not displace the home (owner home spec). */
 .np{
   height:100%; display:flex; align-items:center; justify-content:center;
   gap:36px; padding:0 48px; box-sizing:border-box;

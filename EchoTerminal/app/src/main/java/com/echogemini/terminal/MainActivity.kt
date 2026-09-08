@@ -515,6 +515,10 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         statusBar.micMuted = on
         prefs.edit().putBoolean(PREF_MUTED, on).apply()
         led?.setMuted(on)
+        // The WebView home shows a rail mute chip while the device is deaf
+        // (UI-BRIEF-14). Calls queue until the page is ready, so a muted boot
+        // still lands the chip.
+        web?.mute(on)
         Log.i(TAG, if (on) "privacy MUTE on" else "privacy mute off")
     }
 
@@ -769,6 +773,14 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             // for the full desired state; the device owns the gate.
             Protocol.Type.MUTE -> runOnUiThread {
                 applyPrivacyMute(msg.bool("on", false))
+            }
+
+            // v1.6 (UI-BRIEF-14): the server's focus computation (chat while a
+            // session runs, music while the speaker card is up, else home)
+            // picks the layout template. Unknown foci fall back to home in the
+            // WebView. The Canvas fallback shows the clock for all foci.
+            Protocol.Type.LAYOUT -> runOnUiThread {
+                web?.layout(msg.str("focus", "home"))
             }
 
             // The model has finished answering and the server is counting down
