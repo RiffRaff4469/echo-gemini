@@ -49,6 +49,8 @@ import protocol as P
         P.AlarmCommand(op=P.AlarmOp.SET_TIMER, label="Pasta", duration_s=600),
         P.AlarmCommand(op=P.AlarmOp.CANCEL, id="a1", kind="alarm"),
         P.AlarmFired(kind=P.AlarmKind.TIMER, id="t2", label="Pasta"),
+        P.Select(index=0),
+        P.Select(index=5),
     ],
 )
 def test_control_message_round_trip(msg: P.Message) -> None:
@@ -105,6 +107,27 @@ def test_media_control_round_trip() -> None:
 def test_media_control_rejects_an_unknown_action() -> None:
     with pytest.raises(P.ProtocolError):
         P.decode('{"v":1,"t":"media_control","action":"eject"}')
+
+
+def test_select_wire_message_decodes() -> None:
+    """v1.6 (UI-BRIEF-16): an options-panel row tap is its own message type."""
+    msg = P.decode('{"v":1,"t":"select","index":2}')
+    assert isinstance(msg, P.Select)
+    assert msg.index == 2
+    with pytest.raises(P.ProtocolError):
+        P.decode('{"v":1,"t":"select"}')          # missing index
+    with pytest.raises(P.ProtocolError):
+        P.decode('{"v":1,"t":"select","index":-1}')
+    with pytest.raises(P.ProtocolError):
+        P.decode('{"v":1,"t":"select","index":"two"}')
+
+
+def test_clip_text_marks_a_truncation() -> None:
+    assert P.clip_text("short", 28) == "short"
+    long_label = "a" * 40
+    clipped = P.clip_text(long_label, P.OPTION_LABEL_MAX_CHARS)
+    assert len(clipped) == P.OPTION_LABEL_MAX_CHARS
+    assert clipped.endswith("\u2026")
 
 
 def test_display_message_round_trip() -> None:
@@ -242,6 +265,18 @@ def test_audio_frame_constants_match_the_live_api_spec() -> None:
                 "is_playing": True,
             },
         },
+        # v1.6 panels (UI-BRIEF-16): options and list.
+        {
+            "type": "options",
+            "payload": {
+                "question": "Which one?",
+                "options": [{"label": "One"}, {"label": "Two", "sub": "detail"}],
+            },
+        },
+        {
+            "type": "list",
+            "payload": {"title": "Steps", "items": ["First", "Second", "Third"]},
+        },
     ],
 )
 def test_valid_display_commands_accepted(body: dict) -> None:
@@ -276,6 +311,23 @@ def test_valid_display_commands_accepted(body: dict) -> None:
         {"type": "now_playing", "payload": {"title": "x", "progress_s": -1}},
         {"type": "now_playing", "payload": {"title": "x", "duration_s": 0}},
         {"type": "now_playing", "payload": {"title": "x", "is_playing": "yes"}},
+        # v1.6 panels (UI-BRIEF-16): structural rejects.
+        {"type": "options", "payload": {"options": []}},
+        {"type": "options", "payload": {"options": [{"label": "only"}]}},
+        {"type": "options", "payload": {"options": [{"label": str(i)} for i in range(7)]}},
+        {"type": "options", "payload": {"options": [{"label": "One"}, {"label": ""}]}},
+        {"type": "options", "payload": {"options": [{"label": "One"}, {"label": 5}]}},
+        {"type": "options", "payload": {"options": ["One", "Two"]}},
+        {
+            "type": "options",
+            "payload": {
+                "options": [{"label": "x" * (P.OPTION_LABEL_MAX_CHARS + 1)}, {"label": "Two"}]
+            },
+        },
+        {"type": "list", "payload": {"items": []}},
+        {"type": "list", "payload": {"items": [str(i) for i in range(P.LIST_MAX_ITEMS + 1)]}},
+        {"type": "list", "payload": {"items": ["One", ""]}},
+        {"type": "list", "payload": {"items": "One, Two"}},
     ],
 )
 def test_invalid_display_commands_rejected(body) -> None:

@@ -112,6 +112,7 @@ class MsgType(str, Enum):
     ALARM_FIRED = "alarm_fired"  # v1.1
     STOPWATCH_STATE = "stopwatch_state"  # v1.6, device -> server
     MEDIA_CONTROL = "media_control"  # v1.5
+    SELECT = "select"  # v1.6: tap on an options-panel row (UI-BRIEF-16)
 
     # server -> device
     WELCOME = "welcome"
@@ -164,6 +165,26 @@ class DisplayType(str, Enum):
     IMAGE = "image"
     TIMER = "timer"
     NOW_PLAYING = "now_playing"  # v1.1 -- rendered like any other card
+    # v1.6 -- interactive panels (UI-BRIEF-16). Rendered as TRUSTED DOM by the
+    # device's own renderer (same trust class as the other cards), never as
+    # server HTML. OPTIONS rows are tappable and come back as `select`.
+    OPTIONS = "options"
+    LIST = "list"
+
+
+# Panel payload bounds (UI-BRIEF-16). OPTIONS rows must fit the 960x480 touch
+# surface with >= 48 px tap targets, so the count is hard-capped and labels are
+# clipped at the server. LIST is an enumerated read-only panel (steps, recipes,
+# schedules) with a looser cap.
+OPTIONS_MIN = 2
+OPTIONS_MAX = 6
+OPTION_LABEL_MAX_CHARS = 28
+OPTION_SUB_MAX_CHARS = 40
+OPTION_HEADER_MAX_CHARS = 80
+LIST_MIN_ITEMS = 1
+LIST_MAX_ITEMS = 15
+LIST_ITEM_MAX_CHARS = 64
+LIST_HEADER_MAX_CHARS = 64
 
 
 class MediaAction(str, Enum):
@@ -395,6 +416,69 @@ class DisplayCommand:
             is_playing = p.get("is_playing")
             if is_playing is not None and not isinstance(is_playing, bool):
                 raise ProtocolError("payload.is_playing must be true or false")
+        elif self.type is DisplayType.OPTIONS:
+            # Tappable choice rows (UI-BRIEF-16). Count is bounded so the rows
+            # keep >= 48 px touch targets on the 960x480 panel; anything longer
+            # than the caps below is a caller bug, not something to render.
+            _optional_str(p, "title")
+            _optional_str(p, "question")
+            raw = p.get("options")
+            if not isinstance(raw, list) or not (
+                OPTIONS_MIN <= len(raw) <= OPTIONS_MAX
+            ):
+                raise ProtocolError(
+                    f"payload.options must be a list of {OPTIONS_MIN}-"
+                    f"{OPTIONS_MAX} items (got "
+                    f"{'not a list' if not isinstance(raw, list) else len(raw)})"
+                )
+            for i, entry in enumerate(raw):
+                if not isinstance(entry, dict):
+                    raise ProtocolError(
+                        f"payload.options[{i}] must be an object with a label"
+                    )
+                label = entry.get("label")
+                if not isinstance(label, str) or not label:
+                    raise ProtocolError(
+                        f"payload.options[{i}].label must be a non-empty string"
+                    )
+                if len(label) > OPTION_LABEL_MAX_CHARS:
+                    raise ProtocolError(
+                        f"payload.options[{i}].label is longer than "
+                        f"{OPTION_LABEL_MAX_CHARS} characters"
+                    )
+                sub = entry.get("sub")
+                if sub is not None:
+                    if not isinstance(sub, str):
+                        raise ProtocolError(
+                            f"payload.options[{i}].sub must be a string when present"
+                        )
+                    if len(sub) > OPTION_SUB_MAX_CHARS:
+                        raise ProtocolError(
+                            f"payload.options[{i}].sub is longer than "
+                            f"{OPTION_SUB_MAX_CHARS} characters"
+                        )
+        elif self.type is DisplayType.LIST:
+            # Read-only enumerated panel (UI-BRIEF-16): steps, recipes, lists.
+            _optional_str(p, "title")
+            raw = p.get("items")
+            if not isinstance(raw, list) or not (
+                LIST_MIN_ITEMS <= len(raw) <= LIST_MAX_ITEMS
+            ):
+                raise ProtocolError(
+                    f"payload.items must be a list of {LIST_MIN_ITEMS}-"
+                    f"{LIST_MAX_ITEMS} strings (got "
+                    f"{'not a list' if not isinstance(raw, list) else len(raw)})"
+                )
+            for i, item in enumerate(raw):
+                if not isinstance(item, str) or not item:
+                    raise ProtocolError(
+                        f"payload.items[{i}] must be a non-empty string"
+                    )
+                if len(item) > LIST_ITEM_MAX_CHARS:
+                    raise ProtocolError(
+                        f"payload.items[{i}] is longer than "
+                        f"{LIST_ITEM_MAX_CHARS} characters"
+                    )
 
 
 def _require_str(payload: dict[str, Any], key: str) -> str:
@@ -420,6 +504,19 @@ def _optional_number(payload: dict[str, Any], key: str) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ProtocolError(f"payload.{key} must be a number when present")
     return float(value)
+
+
+def clip_text(text: str, max_chars: int) -> str:
+    """Clip a panel string for the 960x480 screen (UI-BRIEF-16).
+
+    The tools that build ``options``/``list`` panels clip long labels here so
+    a row always fits; the *panel state* keeps the untruncated original so a
+    tap maps back to exactly what the model wrote. One trailing ellipsis marks
+    the clip.
+    """
+    if max_chars <= 1 or len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "\u2026"
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +691,25 @@ class MediaControl(Message):
 
     def fields(self) -> dict[str, Any]:
         return {"action": self.action.value}
+
+
+@dataclass
+class Select(Message):
+    """device -> server: the user tapped option row ``index`` (0-based) of the
+    options panel currently on screen (UI-BRIEF-16, v1.6).
+
+    Deliberately NOT a ``tap`` or ``button`` message: since v1.6 the screen is
+    UI-only and talk is owned by the mic button and the wake word. This says
+    which *label* the user picked; the server maps it back to the stored panel
+    so the model hears "the user chose <label>", never a bare index.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.SELECT
+
+    index: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {"index": self.index}
 
 
 @dataclass
@@ -1057,6 +1173,7 @@ for _cls in (
     Button,
     Mute,
     LayoutMsg,
+    Select,
 ):
     _register(_cls)
 
@@ -1120,6 +1237,11 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
                 f"button.action must be talk_toggle or mute (got {action!r})"
             )
         return Button(action=action, ts=ts)
+    if cls is Select:
+        index = data.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ProtocolError("select.index must be an integer >= 0")
+        return Select(index=index, ts=ts)
     if cls is Mute:
         return Mute(on=bool(data.get("on", True)), ts=ts)
     if cls is MediaControl:
