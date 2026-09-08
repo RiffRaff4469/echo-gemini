@@ -209,6 +209,10 @@ class Link(
     fun sendMedia(action: Protocol.MediaAction) =
         sendControl(Protocol.mediaControl(action))
 
+    /** Options-panel row tap (protocol v1.6, design notes). */
+    fun sendSelect(index: Int) =
+        sendControl(Protocol.select(index))
+
     // --- socket callbacks ---------------------------------------------------
 
     private inner class SocketListener : WebSocketListener() {
