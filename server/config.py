@@ -147,6 +147,13 @@ class Config:
     # cache -- treat it exactly as you would the account password.
     spotify_creds_dir: str = "server/spotify_creds"
     spotify_client_id: str = ""
+    # The Web API (playback state, controls) can use its OWN Spotify app id +
+    # credential file, separate from librespot's session credentials. The
+    # shared librespot client id gets rate-limited hard by Spotify; a personal
+    # developer app does not. Empty = fall back to the librespot store (the
+    # original single-store behaviour).
+    spotify_api_client_id: str = ""
+    spotify_api_creds_dir: str = "server/spotify_creds_web"
     spotify_redirect_uri: str = ""
     # 96 | 160 | 320 kbps, as librespot accepts them.
     spotify_bitrate: int = 320
@@ -239,6 +246,8 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
         spotify_librespot_bin=_env("SPOTIFY_LIBRESPOT_BIN", "tools/librespot.exe"),
         spotify_creds_dir=_env("SPOTIFY_CREDS_DIR", "server/spotify_creds"),
         spotify_client_id=_env("SPOTIFY_CLIENT_ID", spotify_auth.LIBRESPOT_CLIENT_ID),
+        spotify_api_client_id=_env("SPOTIFY_API_CLIENT_ID", ""),
+        spotify_api_creds_dir=_env("SPOTIFY_API_CREDS_DIR", "server/spotify_creds_web"),
         spotify_redirect_uri=_env(
             "SPOTIFY_REDIRECT_URI", spotify_auth.DEFAULT_REDIRECT_URI
         ),

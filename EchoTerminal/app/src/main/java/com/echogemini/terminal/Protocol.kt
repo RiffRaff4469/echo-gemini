@@ -33,8 +33,10 @@ object Protocol {
     // pushed by the server for the ambient home screen; v1.3 added the
     // post-answer quiet window (`session_quiet` down, `stay` up); v1.4 replaces
     // `stay` with `stop` -- a tap during a session now ENDS it; v1.5 adds music
-    // (`Channel.AUDIO_MUSIC` down, `media_control` up) for Spotify.
-    const val MINOR = 5
+    // (`Channel.AUDIO_MUSIC` down, `media_control` up) for Spotify; v1.6 adds
+    // the physical mic button (`button` up, `mute` down) and retires screen
+    // taps as session controls.
+    const val MINOR = 6
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
     // produces and consumes exactly these so the server never resamples.
