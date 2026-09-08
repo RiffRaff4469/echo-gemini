@@ -37,11 +37,22 @@ from gemini_live import LiveSessionManager  # noqa: E402
 from protocol import (  # noqa: E402
     Channel,
     DisplayCommand,
+    DisplayType,
+    LIST_HEADER_MAX_CHARS,
+    LIST_ITEM_MAX_CHARS,
+    LIST_MAX_ITEMS,
+    LIST_MIN_ITEMS,
     MediaAction,
     MediaFrame,
+    OPTIONS_MAX,
+    OPTIONS_MIN,
+    OPTION_HEADER_MAX_CHARS,
+    OPTION_LABEL_MAX_CHARS,
     ProtocolError,
+    Select,
     SeqCounter,
     UiState,
+    clip_text,
 )
 from govee import GoveeHub
 from memory import get_store
@@ -196,6 +207,12 @@ class Hub:
         self._last_focus: P.LayoutFocus | None = None
         self._music_card = False
 
+        # On-screen interactive panel (UI-BRIEF-16). Only ``options`` panels
+        # are tappable; ``list`` panels are read-only. Cleared when: a newer
+        # panel replaces it, display_clear arrives, a ``select`` is accepted,
+        # or the session that pushed it ends (state -> idle -- see set_state).
+        self._panel: dict[str, Any] | None = None
+
         self.wake = WakeWordEngine(
             build_detector(
                 enabled=cfg.wake_enabled,
@@ -326,6 +343,12 @@ class Hub:
     async def set_state(self, state: UiState) -> None:
         if self.link:
             self.link.send_msg(P.StateMsg(state=state))
+        # The conversation that owned an on-screen panel ended (voice cancel,
+        # idle timeout, or a session that never opened). A panel left behind
+        # would sit on the screen over the clock forever, so drop it -- and
+        # tell the device to put the card away.
+        if state is UiState.IDLE and self._panel is not None:
+            self.clear_display()
         # A session starting or ending changes the layout focus (UI-BRIEF-14).
         self._maybe_push_layout()
 
@@ -412,6 +435,9 @@ class Hub:
             await self._on_stop()
         elif isinstance(msg, P.Button):
             await self._on_button(msg)
+        elif isinstance(msg, P.Select):
+            # v1.6 (UI-BRIEF-16): a tap on an options-panel row.
+            await self._on_select(msg)
         elif isinstance(msg, P.MediaControl):
             await self._on_media_control(link, msg)
         elif isinstance(msg, P.CameraStatusMsg):
@@ -546,6 +572,190 @@ class Hub:
         log.info("mic button: talk")
         await self.set_state(UiState.LISTENING)
         await self.session.start("button")
+
+    # --- visual panels (UI-BRIEF-16) ---------------------------------------
+
+    @property
+    def panel(self) -> dict[str, Any] | None:
+        """The current on-screen panel: ``kind`` ('options'|'list'),
+        ``question`` (options header, if any) and ``labels`` -- the FULL option
+        labels as the model wrote them, pre-clip, so a tap maps back to exactly
+        what the model knows. ``None`` when nothing interactive is up."""
+        return self._panel
+
+    def _set_panel(
+        self, *, kind: str, labels: list[str] | None, question: str | None
+    ) -> None:
+        self._panel = {"kind": kind, "question": question, "labels": labels}
+
+    def remember_panel(self, cmd: DisplayCommand) -> None:
+        """Record a panel pushed over ``POST /display`` (the payload is already
+        clipped by protocol validation, so mapping uses it verbatim)."""
+        payload = cmd.payload
+        if cmd.type is DisplayType.OPTIONS:
+            labels = [str(o.get("label", "")) for o in payload.get("options", [])]
+            question = payload.get("question") or payload.get("title")
+        else:
+            labels, question = None, None
+        self._set_panel(kind=cmd.type.value, labels=labels, question=question)
+
+    def show_options(
+        self,
+        question: str | None = None,
+        options: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Gemini tool ``show_options``: put tappable choice rows on screen.
+
+        The panel payload is clipped for the 960x480 display; the stored panel
+        keeps the originals so a ``select`` maps to the label the model wrote.
+        An invalid shape returns an error dict (the model recovers) rather
+        than raising.
+        """
+        if not isinstance(options, list) or not isinstance(question, (str, type(None))):
+            return {
+                "error": "show_options expects question (str, optional) and "
+                "options (list of strings)."
+            }
+        full = [str(o).strip() for o in options]
+        if not (OPTIONS_MIN <= len(full) <= OPTIONS_MAX):
+            return {
+                "error": f"show_options needs {OPTIONS_MIN}-{OPTIONS_MAX} "
+                f"options; you passed {len(full)}."
+            }
+        if any(not o for o in full):
+            return {"error": "option labels must not be empty."}
+        payload: dict[str, Any] = {
+            "options": [
+                {"label": clip_text(o, OPTION_LABEL_MAX_CHARS)} for o in full
+            ]
+        }
+        if question:
+            payload["question"] = clip_text(
+                str(question).strip(), OPTION_HEADER_MAX_CHARS
+            )
+        self._set_panel(
+            kind="options",
+            labels=full,
+            question=str(question).strip() if question else None,
+        )
+        self.push_display(
+            DisplayCommand(
+                type=DisplayType.OPTIONS,
+                payload=payload,
+                duration=0.0,
+                priority=1,
+            )
+        )
+        return {
+            "ok": True,
+            "displayed": len(full),
+            "note": "The choices are on the screen. Ask the question in one "
+            "short sentence and stop; do not read the options aloud.",
+        }
+
+    def show_list(
+        self,
+        title: str | None = None,
+        items: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Gemini tool ``show_list``: a read-only enumerated panel (steps,
+        recipes, schedules, search results). Not tappable -- the rows carry no
+        ``select`` meaning; a tap while one is up is ignored."""
+        if not isinstance(items, list) or not isinstance(title, (str, type(None))):
+            return {
+                "error": "show_list expects title (str, optional) and "
+                "items (list of strings)."
+            }
+        full = [str(i).strip() for i in items]
+        if not (LIST_MIN_ITEMS <= len(full) <= LIST_MAX_ITEMS):
+            return {
+                "error": f"show_list needs {LIST_MIN_ITEMS}-{LIST_MAX_ITEMS} "
+                f"items; you passed {len(full)}."
+            }
+        if any(not i for i in full):
+            return {"error": "list items must not be empty."}
+        payload: dict[str, Any] = {
+            "items": [clip_text(i, LIST_ITEM_MAX_CHARS) for i in full]
+        }
+        if title:
+            payload["title"] = clip_text(str(title).strip(), LIST_HEADER_MAX_CHARS)
+        self._set_panel(
+            kind="list",
+            labels=None,
+            question=str(title).strip() if title else None,
+        )
+        self.push_display(
+            DisplayCommand(
+                type=DisplayType.LIST,
+                payload=payload,
+                duration=0.0,
+                priority=1,
+            )
+        )
+        return {
+            "ok": True,
+            "displayed": len(full),
+            "note": "Say a one-line summary; the full list is on the screen.",
+        }
+
+    def clear_panel(self) -> dict[str, Any]:
+        """Gemini tool ``clear_panel``: the user dismissed the screen (\"never
+        mind\", \"clear the screen\"). Clears whatever card is up."""
+        self.clear_display()
+        return {"ok": True, "note": "The screen is clear."}
+
+    async def _on_select(self, msg: P.Select) -> None:
+        """A tap on an options-panel row (device -> server, UI-BRIEF-16).
+
+        Maps the 0-based index back to the stored label, then hands the model
+        the label itself: mid-session it is queued and delivered when the
+        current turn ends; idle it opens a session whose first input carries
+        the on-screen question + the tapped label.
+        """
+        panel = self._panel
+        if panel is None:
+            log.info("select %d ignored: no panel on screen", msg.index)
+            return
+        labels = panel.get("labels")
+        if not labels:
+            log.info("select %d ignored: panel on screen is not interactive", msg.index)
+            return
+        if msg.index < 0 or msg.index >= len(labels):
+            log.warning("select %d ignored: panel has %d option(s)", msg.index, len(labels))
+            if self.link:
+                self.link.send_msg(
+                    P.ErrorMsg(
+                        code="bad_select", message=f"no option {msg.index} on screen"
+                    )
+                )
+            return
+        label = labels[msg.index]
+        question = panel.get("question")
+
+        if self.session.active:
+            # The tap resolves the panel before the model hears about it, so a
+            # second tap cannot double-answer a question nobody asked twice.
+            self.clear_display()
+            text = f"the user chose {label}"
+            if self.session.choose(text):
+                log.info("select %d -> %r queued into the active session", msg.index, label)
+            else:
+                log.warning("select %d -> %r could not be queued", msg.index, label)
+            return
+
+        # Idle: open a session that starts from the on-screen context. Only
+        # clear the panel once a session can actually take the answer.
+        started = await self.session.start("select")
+        if not started:
+            log.info("select %d ignored: no live session available", msg.index)
+            return
+        self.clear_display()
+        if question:
+            text = f"On-screen question: {question}. The user tapped {label}."
+        else:
+            text = f"The user tapped {label} on the on-screen options."
+        self.session.choose(text)
+        log.info("select %d -> %r opened a session", msg.index, label)
 
     async def _apply_mute(self, on: bool) -> None:
         """Server-side mirror of the device-owned privacy mute.
@@ -730,6 +940,9 @@ class Hub:
         return True
 
     def clear_display(self) -> None:
+        # Whatever the device is showing is gone; so is any panel state that
+        # would map a later (stale) tap to an option nobody can see anymore.
+        self._panel = None
         if self.link:
             self.link.send_msg(P.DisplayClear())
 
@@ -962,6 +1175,10 @@ async def display_handler(request: web.Request) -> web.Response:
         )
 
     hub.push_display(cmd)
+    # An options/list panel pushed over HTTP is interactive too: remember it
+    # so a later `select` maps to the on-screen labels.
+    if cmd.type in (DisplayType.OPTIONS, DisplayType.LIST):
+        hub.remember_panel(cmd)
     log.info(
         "display push: type=%s duration=%.0fs priority=%d",
         cmd.type.value,

@@ -188,6 +188,8 @@ class StubSession:
         self.touches = 0
         self.quiet_seconds_left: float | None = None
         self.vision_on = False
+        # UI-BRIEF-16: choices queued into the session (select taps).
+        self.choices: list[str] = []
 
     async def start(self, reason: str) -> bool:
         self.starts.append(reason)
@@ -197,6 +199,12 @@ class StubSession:
     async def stop(self, reason: str) -> None:
         self.stops.append(reason)
         self.active = False
+
+    def choose(self, text: str) -> bool:
+        if not self.active:
+            return False
+        self.choices.append(text)
+        return True
 
     def touch(self) -> None:
         self.touches += 1
@@ -280,6 +288,19 @@ async def test_an_old_clients_stay_is_treated_as_a_stop(client: TestClient) -> N
                 "duration_s": 330,
                 "is_playing": True,
             },
+        },
+        # v1.6 panels (UI-BRIEF-16).
+        {
+            "type": "options",
+            "payload": {
+                "question": "Pick one",
+                "options": [{"label": "Alpha"}, {"label": "Beta"}, {"label": "Gamma"}],
+            },
+            "priority": 1,
+        },
+        {
+            "type": "list",
+            "payload": {"title": "Groceries", "items": ["Milk", "Eggs", "Bread"]},
         },
     ],
 )
