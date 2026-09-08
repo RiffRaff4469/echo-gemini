@@ -571,7 +571,23 @@ class SpotifyController:
             Path(cfg.spotify_creds_dir) / "token.json", client_id=cfg.spotify_client_id
         )
         self.tokens.load()
-        self.api = api or WebApi(self.tokens)
+        # The Web API can ride its own Spotify app (personal developer app =
+        # real rate budget) while librespot's streaming session keeps the
+        # librespot credentials. Falls back to the shared store when no
+        # separate app is configured.
+        if cfg.spotify_api_client_id:
+            api_tokens = TokenStore(
+                Path(cfg.spotify_api_creds_dir) / "token.json",
+                client_id=cfg.spotify_api_client_id,
+            )
+            api_tokens.load()
+        else:
+            api_tokens = self.tokens
+        self.api = api or WebApi(api_tokens)
+        # librespot's own session must keep the librespot-app credentials (a
+        # personal-app token is rejected by its spirc login), so it refreshes
+        # from the main store via its own WebApi handle used only for tokens.
+        self._spawn_tokens = WebApi(self.tokens)
         self.art = ArtCache(self.api)
 
         self.supervisor = supervisor or LibrespotSupervisor(
@@ -702,7 +718,7 @@ class SpotifyController:
         afterwards, so this only has to be valid at spawn time -- but it has to
         be valid *then*, which is why it is fetched per attempt rather than once.
         """
-        return await self.api.access_token()
+        return await self._spawn_tokens.access_token()
 
     # --- device -----------------------------------------------------------
 

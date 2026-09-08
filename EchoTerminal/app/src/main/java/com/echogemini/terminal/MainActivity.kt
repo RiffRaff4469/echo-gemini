@@ -402,11 +402,11 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     // --- the physical mic button (HARDWARE-BRIEF-7 v2) ----------------------
 
     /**
-     * The mic button arrives as the MICMUTE key once the device-side keylayout
-     * (`gating.kl`: key 116 MICMUTE) stops the stock LOS behaviour of treating
-     * it as the power key. (KEYCODE_MICMUTE == 277; the SDK constant is not
-     * exposed before API 35, so the numeric value is pinned here with the
-     * framework's own KeyEvent keycode 277.)
+     * The mic button arrives as KEYCODE_F1 (131) once the device-side
+     * keylayout (`gating.kl`: key 116 -> F1) stops the stock LOS behaviour of
+     * treating it as the power key. MICMUTE (277) is not exposed below API 35,
+     * and system keys such as POWER or ASSIST are intercepted by the framework
+     * before the app ever sees them -- F1 is a plain pass-through keycode.
      */
     private val micButtonDownAt = AtomicLong(0L)
 
@@ -419,12 +419,22 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     }
 
     private fun keycodeIsMicButton(keyCode: Int): Boolean =
-        keyCode == 277  // KEYCODE_MICMUTE; not exposed by the SDK before API 35
+        keyCode == KeyEvent.KEYCODE_F1 || keyCode == 131
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Debug aid while the keylayout lands: log any key that reaches the
+        // activity so a physical press tells us the framework's actual code.
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            Log.i(TAG, "key down: ${event.keyCode} (${KeyEvent.keyCodeToString(event.keyCode)})")
+        }
         if (!keycodeIsMicButton(event.keyCode)) return super.dispatchKeyEvent(event)
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
+                // Ignore framework key-repeat downs: a held key re-sends
+                // ACTION_DOWN every ~50 ms, and treating each as a fresh press
+                // would reset the hold timer forever (the 1 s mute would never
+                // fire) and make the eventual release look like a short press.
+                if (event.repeatCount > 0) return true
                 micButtonDownAt.set(event.eventTime)
                 handler.removeCallbacks(holdTask)
                 handler.postDelayed(holdTask, MIC_HOLD_MS)
