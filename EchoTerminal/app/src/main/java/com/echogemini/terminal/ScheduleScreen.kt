@@ -17,6 +17,7 @@ import kotlin.math.ceil
 
 /** Large touch targets, local add/cancel controls, and a ring screen above pushed cards. */
 class ScheduleScreen(context: Context, private val scheduler: AlarmScheduler,
+                     private val stopwatch: Stopwatch,
                      private val requestExact: () -> Unit) : LinearLayout(context) {
     var page = "home"
         private set
@@ -28,6 +29,52 @@ class ScheduleScreen(context: Context, private val scheduler: AlarmScheduler,
 
     fun open(kind: String) { page = kind; signature = ""; render() }
     fun back() { if (scheduler.ringing.isEmpty()) open("home") }
+
+    /** The stopwatch's live elapsed view, updated in place on ticks. */
+    private var stopwatchElapsed: TextView? = null
+    private var stopwatchLaps: LinearLayout? = null
+    private var stopwatchLapSignature = ""
+
+    /** Lightweight tick: only the stopwatch page's own views move. */
+    fun stopwatchTick() {
+        if (page != "stopwatch" || visibility != VISIBLE) return
+        stopwatchElapsed?.text = formatStopwatch(stopwatch.elapsed())
+        val sig = stopwatch.laps.joinToString(",")
+        if (sig != stopwatchLapSignature) {
+            stopwatchLapSignature = sig
+            renderLaps()
+        }
+    }
+
+    private fun renderLaps() {
+        val container = stopwatchLaps ?: return
+        container.removeAllViews()
+        val laps = stopwatch.laps
+        if (laps.isEmpty()) {
+            container.addView(text("No laps yet", 22f))
+        } else {
+            // Latest lap first; each shows its delta from the previous.
+            var prev = 0L
+            val rows = laps.mapIndexed { i, lapMs ->
+                val delta = lapMs - prev
+                prev = lapMs
+                val label = "Lap ${i + 1}"
+                val row = LinearLayout(context)
+                row.addView(text(label, 24f), LayoutParams(0, -2, 1f))
+                row.addView(text(formatStopwatch(delta), 24f), LayoutParams(0, -2, 1f))
+                row
+            }.reversed()
+            rows.forEach { container.addView(it) }
+        }
+    }
+
+    private fun formatStopwatch(ms: Long): String {
+        val total = ms.coerceAtLeast(0L)
+        val minutes = total / 60000
+        val seconds = (total % 60000) / 1000
+        val tenths = (total % 1000) / 100
+        return "%02d:%02d.%d".format(minutes, seconds, tenths)
+    }
 
     fun render() {
         val snapshot = JSONObject(scheduler.snapshot())
@@ -61,6 +108,10 @@ class ScheduleScreen(context: Context, private val scheduler: AlarmScheduler,
             addView(buttons, LayoutParams(-1, pad * 7))
             return
         }
+        if (page == "stopwatch") {
+            renderStopwatchPage()
+            return
+        }
         val header = LinearLayout(context)
         header.addView(button("‹ Clock") { back() }, LayoutParams(0, -2, 1f))
         header.addView(text(if (page == "alarm") "Alarms" else "Timers", 30f), LayoutParams(0, -1, 2f))
@@ -80,6 +131,37 @@ class ScheduleScreen(context: Context, private val scheduler: AlarmScheduler,
             list.addView(row)
         }
         addView(ScrollView(context).apply { addView(list) }, LayoutParams(-1, 0, 1f))
+    }
+
+    /** The stopwatch page: big readout, Start/Pause + Lap + Reset, lap list. */
+    private fun renderStopwatchPage() {
+        val header = LinearLayout(context)
+        header.addView(button("‹ Clock") { back() }, LayoutParams(0, -2, 1f))
+        header.addView(text("Stopwatch", 30f), LayoutParams(0, -1, 2f))
+        addView(header)
+
+        // The running readout is a stored view so the 100 ms tick updates it in
+        // place rather than rebuilding the page.
+        val readout = text(formatStopwatch(stopwatch.elapsed()), 96f)
+        readout.gravity = Gravity.CENTER
+        stopwatchElapsed = readout
+        addView(readout, LayoutParams(-1, 0, 1.4f))
+
+        val controls = LinearLayout(context)
+        val primary = button(if (stopwatch.running) "Pause" else "Start") {
+            if (stopwatch.running) stopwatch.pause() else stopwatch.start()
+            render()  // flip the label + rebuild once per transition, not per tick
+        }
+        controls.addView(primary, LayoutParams(0, -2, 1f))
+        controls.addView(button("Lap") { stopwatch.lap(); render() }, LayoutParams(0, -2, 1f).apply { marginStart = pad })
+        controls.addView(button("Reset") { stopwatch.reset(); render() }, LayoutParams(0, -2, 1f).apply { marginStart = pad })
+        addView(controls, LayoutParams(-1, pad * 6))
+
+        val laps = LinearLayout(context).apply { orientation = VERTICAL }
+        stopwatchLaps = laps
+        stopwatchLapSignature = ""
+        addView(ScrollView(context).apply { addView(laps) }, LayoutParams(-1, 0, 1f))
+        renderLaps()
     }
 
     private fun describe(e: JSONObject): String {

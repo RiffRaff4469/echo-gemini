@@ -76,9 +76,14 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     private lateinit var clock: AmbientClock
     private lateinit var statusBar: StatusOverlay
     private lateinit var scheduler: AlarmScheduler
+    private lateinit var stopwatch: Stopwatch
     private lateinit var scheduleScreen: ScheduleScreen
     private lateinit var alarmTile: Button
     private lateinit var timerTile: Button
+    private lateinit var stopwatchTile: Button
+    /** Last chip text pushed to the WebView (seconds-resolution throttle). */
+    private var lastStopwatchChip = ""
+    private var lastStopwatchRunning = false
 
     /** Main-thread handler for the button hold timer. */
     private val handler = Handler(Looper.getMainLooper())
@@ -145,6 +150,13 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         scheduler.onFired = { playback?.flush(); link?.sendControl(it.toString()) }
         scheduler.onState = { link?.sendControl(scheduler.snapshot()) }
         scheduler.restore()
+        stopwatch.onChanged = {
+            // Live ticks update the stopwatch page in place; tiles refresh
+            // cheaply. Full renders only happen on page opens/transitions.
+            scheduleScreen.stopwatchTick()
+            updateTiles()
+        }
+        stopwatch.onState = { link?.sendControl(it) }
         hideSystemBars()
 
         // As the HOME activity, back must not escape to a blank launcher.
@@ -209,7 +221,8 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         canvasLayer.addView(clock, FrameLayout.LayoutParams(-1, -1))
 
         scheduler = AlarmScheduler.get(this)
-        scheduleScreen = ScheduleScreen(this, scheduler) { requestExactAlarms() }
+        stopwatch = Stopwatch.get(this)
+        scheduleScreen = ScheduleScreen(this, scheduler, stopwatch) { requestExactAlarms() }
 
         // Proportions match what AmbientClock reserves for its own bottom rail,
         // so the chips and the weather card sit on one line.
@@ -217,10 +230,17 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         val tileHeight = (panelHeight * 0.19f).toInt()
         alarmTile = ambientTile(tileHeight) { openSchedule("alarm") }
         timerTile = ambientTile(tileHeight) { openSchedule("timer") }
+        stopwatchTile = ambientTile(tileHeight) { openSchedule("stopwatch") }
         val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tiles.addView(alarmTile, LinearLayout.LayoutParams(-2, -1))
         tiles.addView(
             timerTile,
+            LinearLayout.LayoutParams(-2, -1).apply {
+                marginStart = (tileHeight * 0.16f).toInt()
+            }
+        )
+        tiles.addView(
+            stopwatchTile,
             LinearLayout.LayoutParams(-2, -1).apply {
                 marginStart = (tileHeight * 0.16f).toInt()
             }
@@ -559,6 +579,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
 
         override fun onOpenAlarm() = openSchedule("alarm")
         override fun onOpenTimer() = openSchedule("timer")
+        override fun onOpenStopwatch() = openSchedule("stopwatch")
 
         override fun onMedia(action: Protocol.MediaAction) {
             // Nothing changes locally. The player is on the PC, so this is a
@@ -707,7 +728,16 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     override fun onControl(msg: Protocol.Incoming) {
         when (msg.type) {
             Protocol.Type.ALARM_COMMAND -> runOnUiThread {
-                link?.sendControl(scheduler.command(msg.body))
+                val body = msg.body
+                val op = body.optString("op", "")
+                // Stopwatch ops ride the alarm_command channel (v1.6,
+                // CLOCK-BRIEF-STOPWATCH); route them to the stopwatch, whose
+                // reply is the state ack the server's tool round trip waits on.
+                if (op.startsWith("stopwatch_")) {
+                    link?.sendControl(stopwatch.command(body))
+                } else {
+                    link?.sendControl(scheduler.command(body))
+                }
             }
             Protocol.Type.WELCOME -> Log.i(
                 TAG,
@@ -831,6 +861,20 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         alarmTile.text = "Alarms · $alarms"
         timerTile.text = "Timers · $timers"
         web?.schedule(alarms, timers)
+        pushStopwatchChip()
+    }
+
+    /** Stopwatch tile + WebView chip, throttled to seconds-resolution changes. */
+    private fun pushStopwatchChip() {
+        val ms = stopwatch.elapsed()
+        val totalS = ms / 1000
+        val text = "%02d:%02d".format(totalS / 60, totalS % 60)
+        stopwatchTile.text = if (stopwatch.running) "Stopwatch · $text" else "Stopwatch"
+        if (text != lastStopwatchChip || stopwatch.running != lastStopwatchRunning) {
+            lastStopwatchChip = text
+            lastStopwatchRunning = stopwatch.running
+            web?.stopwatch(stopwatch.running, text)
+        }
     }
 
     private fun requestExactAlarms() {

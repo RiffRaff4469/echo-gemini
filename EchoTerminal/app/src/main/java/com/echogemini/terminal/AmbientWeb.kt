@@ -64,6 +64,7 @@ class AmbientWeb private constructor(
         fun onTap()
         fun onOpenAlarm()
         fun onOpenTimer()
+        fun onOpenStopwatch()  // v1.6 (CLOCK-BRIEF-STOPWATCH)
 
         /** A transport button on the now-playing card (protocol v1.5). */
         fun onMedia(action: Protocol.MediaAction)
@@ -197,6 +198,10 @@ class AmbientWeb private constructor(
     fun uiState(state: Protocol.UiState) =
         call("Echo.uiState(${JSONObject.quote(state.wire)})")
 
+    /** Stopwatch mirror for the home chip (v1.6). */
+    fun stopwatch(running: Boolean, text: String) =
+        call("Echo.stopwatch($running, ${JSONObject.quote(text)})")
+
     fun weather(reading: Protocol.Weather) {
         val json = JSONObject().apply {
             put("temp_c", reading.tempC)
@@ -245,6 +250,9 @@ class AmbientWeb private constructor(
 
         @JavascriptInterface
         fun openTimer() = handler.post { callbacks.onOpenTimer() }
+
+        @JavascriptInterface
+        fun openStopwatch() = handler.post { callbacks.onOpenStopwatch() }
 
         /**
          * The page's transport row. Validated to one of the five known actions

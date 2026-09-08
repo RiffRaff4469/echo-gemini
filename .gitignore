@@ -42,3 +42,4 @@ server/recordings/
 tools/librespot*
 
 server/memory/jarvis.json
+server/spotify_creds_web/

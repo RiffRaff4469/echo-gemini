@@ -23,6 +23,7 @@
     tap: function () { console.log('tap'); },
     openAlarm: function () { console.log('openAlarm'); },
     openTimer: function () { console.log('openTimer'); },
+    openStopwatch: function () { console.log('openStopwatch'); },
     media: function (a) { console.log('media ' + a); },
     log: function (m) { console.log(m); }
   };
@@ -532,6 +533,7 @@
   });
   $('alarm-chip').addEventListener('click', function () { NATIVE.openAlarm(); });
   $('timer-chip').addEventListener('click', function () { NATIVE.openTimer(); });
+  $('stopwatch-chip').addEventListener('click', function () { NATIVE.openStopwatch(); });
 
   // The now-playing transport row. Its buttons carry data-ui, so the handler
   // above has already declined to treat the press as a tap-to-talk -- pressing
@@ -571,6 +573,11 @@
     schedule: function (alarms, timers) {
       $('alarm-chip').innerHTML = 'Alarms &middot; ' + alarms;
       $('timer-chip').innerHTML = 'Timers &middot; ' + timers;
+    },
+
+    /** Stopwatch mirror for the home chip (v1.6). */
+    stopwatch: function (running, text) {
+      $('stopwatch-chip').innerHTML = running ? 'Stopwatch &middot; ' + text : 'Stopwatch';
     },
 
     display: function (type, payloadJson, durationMs, priority) {
