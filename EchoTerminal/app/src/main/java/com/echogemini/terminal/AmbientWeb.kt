@@ -32,8 +32,9 @@ import org.json.JSONObject
  *
  * ## The bridge, and what is deliberately not on it
  *
- * JS can call exactly six things: [tap], [openAlarm], [openTimer],
- * [openStopwatch], [media] and [log]. There is no shell, no file access, no
+ * JS can call exactly seven things: [tap], [select], [openAlarm],
+ * [openTimer], [openStopwatch], [media] and [log]. There is no shell, no file
+ * access, no
  * link handle and no way to send an arbitrary control message -- [media]
  * takes one of five fixed action words and anything else is dropped here
  * rather than forwarded. Server-pushed `html` cards are rendered by the page
@@ -65,6 +66,7 @@ class AmbientWeb private constructor(
         fun onOpenAlarm()
         fun onOpenTimer()
         fun onOpenStopwatch()  // v1.6 (CLOCK-BRIEF-STOPWATCH)
+        fun onSelect(index: Int)  // v1.6 (UI-BRIEF-16): options-panel row tap
 
         /** A transport button on the now-playing card (protocol v1.5). */
         fun onMedia(action: Protocol.MediaAction)
@@ -257,6 +259,9 @@ class AmbientWeb private constructor(
     private inner class Bridge {
         @JavascriptInterface
         fun tap() = handler.post { callbacks.onTap() }
+
+        @JavascriptInterface
+        fun select(index: Int) = handler.post { callbacks.onSelect(index) }
 
         @JavascriptInterface
         fun openAlarm() = handler.post { callbacks.onOpenAlarm() }

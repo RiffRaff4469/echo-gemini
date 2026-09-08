@@ -36,6 +36,7 @@
     openTimer: function () { console.log('openTimer'); },
     openStopwatch: function () { console.log('openStopwatch'); },
     media: function (a) { console.log('media ' + a); },
+    select: function (i) { console.log('select ' + i); },
     log: function (m) { console.log(m); }
   };
 
@@ -294,11 +295,49 @@
       return cardPage('<img class="card-img" src="' + escapeHtml(p.url) + '" alt="">');
     }
     if (type === 'now_playing') return nowPlayingCard(p);
+    if (type === 'options') return optionsCard(p);
+    if (type === 'list') return listCard(p);
     if (type === 'timer') {
       return cardPage('<div class="card-sub">' + escapeHtml(p.label || '') + '</div>' +
         '<div class="card-main card-count" id="card-count">--:--</div>');
     }
     return null;   // html is handled separately: it goes in a sandbox
+  }
+
+  // ------------------------------------------- interactive panels (v1.6)
+  // UI-BRIEF-16: OPTIONS renders big tappable choice rows; LIST renders a
+  // read-only enumeration. Both are TRUSTED DOM rendered by this page from a
+  // typed payload -- never server HTML, same trust class as text/timer cards.
+  // Rows are >=54 px (well over the 48 px floor), mark themselves data-ui so
+  // a tap is NOT tap-to-talk, and send NATIVE.select(index) -- deliberately a
+  // separate message from tap/button: since v1.6 talk belongs to the mic
+  // button and the wake word. The server maps the index back to the label.
+
+  function optionsCard(p) {
+    var head = p.question || p.title || 'Choose one';
+    var rows = (p.options || []).map(function (o, i) {
+      var sub = o.sub
+        ? '<span class="opt-sub">' + escapeHtml(String(o.sub)) + '</span>' : '';
+      return '<button class="opt-row" type="button" data-ui data-select="' + i + '">' +
+        '<span class="opt-idx">' + (i + 1) + '</span>' +
+        '<span class="opt-main"><span class="opt-label">' +
+        escapeHtml(String(o.label)) + '</span>' + sub + '</span>' +
+        '</button>';
+    }).join('');
+    return cardPage('<div class="panel opt-panel">' +
+      '<div class="panel-head">' + escapeHtml(String(head)) + '</div>' +
+      '<div class="panel-rows">' + rows + '</div></div>');
+  }
+
+  function listCard(p) {
+    var title = p.title;
+    var rows = (p.items || []).map(function (it, i) {
+      return '<div class="list-row"><span class="list-idx">' + (i + 1) + '</span>' +
+        '<span class="list-item">' + escapeHtml(String(it)) + '</span></div>';
+    }).join('');
+    return cardPage('<div class="panel list-panel">' +
+      (title ? '<div class="panel-head">' + escapeHtml(String(title)) + '</div>' : '') +
+      '<div class="panel-rows">' + rows + '</div></div>');
   }
 
   // --------------------------------------------------- now playing (v1.5)
@@ -615,8 +654,17 @@
   // a tap-to-talk -- pressing pause must not also open a conversation.
   cardBody.addEventListener('click', function (e) {
     var button = e.target.closest('[data-media]');
-    if (!button) return;
-    NATIVE.media(button.getAttribute('data-media'));
+    if (button) { NATIVE.media(button.getAttribute('data-media')); return; }
+    // Options-panel row (UI-BRIEF-16): tap sends `select {index}`, never a
+    // tap/button. One answer per question: the tapped row is highlighted and
+    // every row locks until the server replaces or clears the panel.
+    var row = e.target.closest('[data-select]');
+    if (row && !row.disabled) {
+      var rows = cardBody.querySelectorAll('[data-select]');
+      for (var i = 0; i < rows.length; i++) rows[i].disabled = true;
+      row.classList.add('chosen');
+      NATIVE.select(parseInt(row.getAttribute('data-select'), 10));
+    }
   });
 
   // ------------------------------------------------- native -> JS surface

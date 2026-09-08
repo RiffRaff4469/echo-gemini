@@ -585,6 +585,18 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         override fun onOpenTimer() = openSchedule("timer")
         override fun onOpenStopwatch() = openSchedule("stopwatch")
 
+        override fun onSelect(index: Int) {
+            // Options-panel row tap (UI-BRIEF-16). Like the transport buttons
+            // this is a page interaction with a meaning of its own -- it must
+            // never also be treated as a screen tap.
+            if (link?.state != Link.State.CONNECTED) {
+                Log.i(TAG, "select $index ignored: link is ${link?.state}")
+                return
+            }
+            Log.i(TAG, "panel select: row $index")
+            link?.sendSelect(index)
+        }
+
         override fun onMedia(action: Protocol.MediaAction) {
             // Nothing changes locally. The player is on the PC, so this is a
             // request; the card redraws when the server's next now_playing push

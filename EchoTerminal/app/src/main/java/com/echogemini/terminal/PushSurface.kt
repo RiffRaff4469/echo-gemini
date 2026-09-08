@@ -135,6 +135,44 @@ class PushSurface(context: Context) : FrameLayout(context) {
         Protocol.DisplayType.IMAGE -> imageTemplate(cmd.payload)
         Protocol.DisplayType.TIMER -> timerTemplate(cmd.payload)
         Protocol.DisplayType.NOW_PLAYING -> nowPlayingTemplate(cmd.payload)
+        // Canvas fallback (no WebView): options/list degrade to a plain,
+        // non-interactive text card. The WebView path renders them as real
+        // touch panels; this is the emergency-only floor (UI-BRIEF-16).
+        Protocol.DisplayType.OPTIONS -> panelTemplate(
+            cmd.payload.optString("question").ifEmpty { cmd.payload.optString("title") },
+            optionLabels(cmd.payload)
+        )
+        Protocol.DisplayType.LIST -> panelTemplate(
+            cmd.payload.optString("title"),
+            listItems(cmd.payload)
+        )
+    }
+
+    private fun optionLabels(p: JSONObject): List<String> {
+        val out = mutableListOf<String>()
+        val arr = p.optJSONArray("options") ?: return out
+        for (i in 0 until arr.length()) {
+            out += arr.optJSONObject(i)?.optString("label") ?: continue
+        }
+        return out
+    }
+
+    private fun listItems(p: JSONObject): List<String> {
+        val out = mutableListOf<String>()
+        val arr = p.optJSONArray("items") ?: return out
+        for (i in 0 until arr.length()) out += arr.optString(i)
+        return out
+    }
+
+    /** Read-only rendering of an options/list panel for the canvas fallback. */
+    private fun panelTemplate(header: String, lines: List<String>): String {
+        val head = if (header.isEmpty()) "" else "<div class='main'>${escape(header)}</div>"
+        val body = lines.mapIndexed { i, text ->
+            "<div class='row'><span class='n'>${i + 1}.</span>${escape(text)}</div>"
+        }.joinToString("")
+        return page("""
+            <div class='wrap'>$head<div class='rows'>$body</div></div>
+        """)
     }
 
     private fun nowPlayingTemplate(p: JSONObject): String {
@@ -221,6 +259,9 @@ class PushSurface(context: Context) : FrameLayout(context) {
           .main { font-size:12vh; font-weight:300; line-height:1.05; }
           .sub  { font-size:5vh; color:#B9C2CF; margin-top:2vh; }
           img   { max-width:100%; max-height:100%; object-fit:contain; }
+          .rows { margin-top:2vh; font-size:4vh; text-align:left; }
+          .row  { margin:1vh 0; }
+          .n    { display:inline-block; width:2.4em; color:#7C8794; }
         </style>
         </head><body>$body</body></html>
     """.trimIndent()

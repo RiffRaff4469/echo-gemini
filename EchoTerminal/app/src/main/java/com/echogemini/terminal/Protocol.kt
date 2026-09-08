@@ -85,6 +85,7 @@ object Protocol {
         const val DEVICE_LOG = "device_log"
         const val ERROR = "error"
         const val MEDIA_CONTROL = "media_control"
+        const val SELECT = "select"  // v1.6, UI-BRIEF-16 (device -> server)
 
         const val WELCOME = "welcome"
         const val PING = "ping"
@@ -130,7 +131,9 @@ object Protocol {
         HTML("html"),
         IMAGE("image"),
         TIMER("timer"),
-        NOW_PLAYING("now_playing");
+        NOW_PLAYING("now_playing"),
+        OPTIONS("options"),  // v1.6, UI-BRIEF-16: tappable choice rows
+        LIST("list");  // v1.6, UI-BRIEF-16: read-only enumerated panel
 
         companion object {
             fun from(wire: String?): DisplayType? = values().firstOrNull { it.wire == wire }
@@ -171,6 +174,15 @@ object Protocol {
      * the screen mid-answer means *enough*; cutting the answer off is intended.
      */
     fun stop(): String = envelope(Type.STOP).toString()
+
+    /**
+     * Options-panel row tap (protocol v1.6, UI-BRIEF-16): the 0-based index of
+     * the row the user pressed. Deliberately NOT a `tap`/`button` message --
+     * the screen is UI-only since v1.6 and talk belongs to the mic button and
+     * the wake word. The server maps the index back to the stored label.
+     */
+    fun select(index: Int): String =
+        envelope(Type.SELECT).apply { put("index", index) }.toString()
 
     /**
      * Physical mic button, classified by duration (protocol v1.6,
