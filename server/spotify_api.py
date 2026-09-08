@@ -204,7 +204,10 @@ class WebApi:
         body = await self.request(
             "GET",
             "/search",
-            params={"q": query, "type": kind, "limit": limit, "market": "from_token"},
+            # market=from_token would need the user-read-private scope, which
+            # the personal-app login does not request; omitting it returns
+            # market-default results and keeps the login scope-light.
+            params={"q": query, "type": kind, "limit": limit},
         )
         items = ((body or {}).get(f"{kind}s") or {}).get("items") or []
         # Spotify can return nulls in a playlist search result list.

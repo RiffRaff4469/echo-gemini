@@ -30,9 +30,12 @@ class AlarmService : Service() {
             NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null) })
         startForeground(17, notification(false))
         scheduler = AlarmScheduler.get(this)
+        // Both singletons must exist BEFORE any callback can fire: the
+        // scheduler's restore() below triggers refreshRuntime -> onServiceChanged
+        // -> update(), which reads stopwatch.running.
+        stopwatch = Stopwatch.get(this)
         scheduler.onServiceChanged = { update() }
         scheduler.restore()
-        stopwatch = Stopwatch.get(this)
         stopwatch.onServiceChanged = { update() }
     }
 
