@@ -9,6 +9,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.graphics.drawable.GradientDrawable
 import android.hardware.SensorManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -506,6 +508,31 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         link?.sendButton("mute")
     }
 
+    // --- listening cue ------------------------------------------------------
+
+    /**
+     * A short double-beep on STREAM_SYSTEM so it sits above whatever else is
+     * playing (music pauses during conversation anyway). Confirmation that the
+     * wake word or the mic button registered, for the moments the screen is
+     * out of view.
+     */
+    private fun playListeningCue() {
+        try {
+            val generator = ToneGenerator(AudioManager.STREAM_SYSTEM, 65)
+            generator.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+            handler.postDelayed({
+                try {
+                    generator.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+                } catch (_: RuntimeException) {
+                }
+            }, 140)
+            handler.postDelayed({ generator.release() }, 500)
+        } catch (_: RuntimeException) {
+            // No tone hardware or AudioManager busy -- the visual ring still
+            // shows the state; a missing cue must never break a session.
+        }
+    }
+
     /** The alarms/timers entry point, from a native tile or a WebView chip. */
     private fun openSchedule(kind: String) {
         push?.fadeToClock(kind)
@@ -689,6 +716,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
             )
 
             Protocol.Type.STATE -> runOnUiThread {
+                val prev = statusBar.state
                 val next = Protocol.UiState.from(msg.str("state"))
                 statusBar.state = next
                 web?.uiState(next)
@@ -696,6 +724,14 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 if (next == Protocol.UiState.IDLE) {
                     statusBar.clearQuietWindow()
                     web?.quietWindow(false)
+                }
+                // A fresh conversation opening (wake word heard, or the mic
+                // button) gets an audio cue: the screen is not always in view,
+                // and "did it hear me?" needs an answer you can hear. Only the
+                // idle -> listening transition cues -- mid-chat re-listens
+                // would ding at every pause.
+                if (next == Protocol.UiState.LISTENING && prev == Protocol.UiState.IDLE) {
+                    playListeningCue()
                 }
             }
 
