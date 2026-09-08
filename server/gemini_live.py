@@ -109,6 +109,18 @@ _SPOTIFY_TOOLS = frozenset(
 
 AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 
+# Visual-answer panels (UI-BRIEF-16): show_options shows tappable choice rows,
+# show_list shows an enumerated read-only panel, clear_panel dismisses whichever
+# is up ("never mind" / "clear the screen"). Declared always: they need nothing
+# but the screen already there.
+SHOW_OPTIONS_TOOL = "show_options"
+SHOW_LIST_TOOL = "show_list"
+CLEAR_PANEL_TOOL = "clear_panel"
+
+_PANEL_TOOLS = frozenset(
+    {SHOW_OPTIONS_TOOL, SHOW_LIST_TOOL, CLEAR_PANEL_TOOL}
+)
+
 # Bound the uplink queue so a stalled API connection cannot grow unboundedly on
 # a machine that is also the household's PC. Dropping the oldest audio is the
 # right failure: stale mic audio is worthless.
@@ -500,7 +512,82 @@ def _build_tools(cfg: Config) -> list[Any]:
             ]
         )
 
+    declarations.extend(_panel_declarations())
+
     return [types.Tool(function_declarations=declarations)]
+
+
+def _panel_declarations() -> list[Any]:
+    """UI-BRIEF-16: typed visual-answer panels (options/list/clear).
+
+    The device renders these itself as trusted DOM; the model only supplies
+    typed payloads. Always declared: the screen is always there.
+    """
+    from google.genai import types
+
+    return [
+        types.FunctionDeclaration(
+            name=SHOW_OPTIONS_TOOL,
+            description=(
+                "Put tappable choices on the screen for a question with discrete "
+                "answers (trivia, 'which do you want', yes/no-ish menus). The "
+                "screen shows the options; speak the question in ONE short "
+                "sentence and then stop -- never read the options aloud. The user "
+                "answers by tapping, which comes back to you as their choice."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "question": types.Schema(
+                        type=types.Type.STRING,
+                        description=(
+                            "The question, short enough to say in one sentence."
+                        ),
+                    ),
+                    "options": types.Schema(
+                        type=types.Type.ARRAY,
+                        description=(
+                            "Two to six short choice labels, each ~28 characters "
+                            "or fewer."
+                        ),
+                        items=types.Schema(type=types.Type.STRING),
+                    ),
+                },
+                required=["question", "options"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=SHOW_LIST_TOOL,
+            description=(
+                "Show an enumerated, read-only list on the screen (steps, "
+                "recipes, schedules, search results). The screen holds the "
+                "detail; speak only a one-line summary."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "title": types.Schema(
+                        type=types.Type.STRING,
+                        description="Short heading for the panel.",
+                    ),
+                    "items": types.Schema(
+                        type=types.Type.ARRAY,
+                        description="One to fifteen short items.",
+                        items=types.Schema(type=types.Type.STRING),
+                    ),
+                },
+                required=["items"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name=CLEAR_PANEL_TOOL,
+            description=(
+                "Dismiss the panel currently on the screen. Call when the user "
+                "says 'never mind', 'forget it', or asks to clear the screen."
+            ),
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+    ]
 
 
 def _system_instruction(cfg: Config) -> str:
@@ -627,6 +714,9 @@ class LiveSessionManager:
         self._session: Any = None
         self._audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(_AUDIO_QUEUE_MAX)
         self._video_q: asyncio.Queue[bytes] = asyncio.Queue(_VIDEO_QUEUE_MAX)
+        # Panel selections (UI-BRIEF-16) waiting to be fed to the model as text.
+        # None between sessions; recreated in start().
+        self._text_q: asyncio.Queue[str] | None = None
         self._vad = EnergyVad(clock=clock)
         self._stop = asyncio.Event()
         self._started_at = 0.0
@@ -686,6 +776,7 @@ class LiveSessionManager:
         self._stop = asyncio.Event()
         self._audio_q = asyncio.Queue(_AUDIO_QUEUE_MAX)
         self._video_q = asyncio.Queue(_VIDEO_QUEUE_MAX)
+        self._text_q = asyncio.Queue()
         self._vad.reset()
         self.dropped_audio_frames = 0
         self._last_user_audio_at = 0.0
@@ -728,6 +819,23 @@ class LiveSessionManager:
         session that nobody is using.
         """
         self._last_activity = self._clock()
+
+    def choose(self, text: str) -> bool:
+        """Feed a panel selection to the model (UI-BRIEF-16).
+
+        Returns False when no session is running to hand it to (the hub opens
+        one first). The text rides a queue drained by ``_pump_choose`` only
+        once the model's current turn has ended, so a tap mid-answer never
+        barges the model off its own question; a tap that lands after the turn
+        is already over goes out immediately.
+        """
+        if not self.active:
+            return False
+        q = self._text_q
+        if q is None:
+            return False
+        q.put_nowait(text)
+        return True
 
     @property
     def idle_seconds(self) -> float:
@@ -889,6 +997,7 @@ class LiveSessionManager:
                     asyncio.create_task(self._pump_video_up(session), name="live-video-up"),
                     asyncio.create_task(self._pump_down(session), name="live-down"),
                     asyncio.create_task(self._pump_end_turn(session), name="live-end-turn"),
+                    asyncio.create_task(self._pump_choose(session), name="live-choose"),
                     asyncio.create_task(self._watchdog(), name="live-watchdog"),
                 ]
                 done, pending = await asyncio.wait(
@@ -1016,6 +1125,38 @@ class LiveSessionManager:
                 video=types.Blob(data=jpeg, mime_type=VIDEO_MIME)
             )
 
+    async def _pump_choose(self, session: Any) -> None:
+        """Deliver panel selections as text once the model's turn has ended.
+
+        UI-BRIEF-16: the user answered the options on screen with a tap. A text
+        sent while the model is still mid-answer would barge it off its own
+        question, so a selection that lands during speech waits here until
+        ``_pump_down`` marks the turn complete; one that lands afterwards (the
+        quiet window, the model done and listening) goes out immediately --
+        same shape as the alarm-note path, which is proven against the API.
+        """
+        q = self._text_q
+        if q is None:
+            return
+        while not self._stop.is_set():
+            try:
+                text = await asyncio.wait_for(q.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue
+            if text is None:
+                return
+            while self._model_speaking and not self._stop.is_set():
+                await asyncio.sleep(0.05)
+            if self._stop.is_set():
+                return
+            self._cancel_quiet_window()
+            self.touch()
+            try:
+                await session.send_realtime_input(text=text)
+                log.info("panel selection sent to the model")
+            except Exception:
+                log.exception("failed to deliver the panel selection to the model")
+
     async def _pump_down(self, session: Any) -> None:
         """Model output: audio to the speaker, interrupts to the flush path.
 
@@ -1125,6 +1266,8 @@ class LiveSessionManager:
         if call.name == STOP_LOOK_TOOL:
             await self.request_vision(False)
             return {"status": "camera_closed"}
+        if call.name in _PANEL_TOOLS:
+            return self._run_panel_tool(call.name, dict(call.args or {}))
         if call.name in _ALARM_TOOLS:
             return await self._run_alarm_tool(call.name, dict(call.args or {}))
         if call.name == "govee_control":
@@ -1161,6 +1304,30 @@ class LiveSessionManager:
 
         log.warning("model called unknown tool %r", call.name)
         return {"error": f"unknown function {call.name}"}
+
+    def _run_panel_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """UI-BRIEF-16 panel tools: show_options / show_list / clear_panel.
+
+        The hub owns the panel state and the device push; these forward the
+        typed call and pass back its model-ready answer. The hub returns an
+        error dict for a payload it cannot show (out-of-bounds option count,
+        empty labels) so the model can say so and recover -- never a raised
+        exception, which would read as a dead session.
+        """
+        if name == SHOW_OPTIONS_TOOL:
+            handler = getattr(self.sink, "show_options", None)
+            if handler is None:
+                return {"error": "on-screen options are not available here."}
+            return handler(question=args.get("question"), options=args.get("options"))
+        if name == SHOW_LIST_TOOL:
+            handler = getattr(self.sink, "show_list", None)
+            if handler is None:
+                return {"error": "on-screen lists are not available here."}
+            return handler(title=args.get("title"), items=args.get("items"))
+        handler = getattr(self.sink, "clear_panel", None)
+        if handler is None:
+            return {"error": "panels are not available here."}
+        return handler()
 
     async def _run_spotify_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Apply a music tool call and answer with what actually happened.
