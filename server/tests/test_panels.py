@@ -244,3 +244,113 @@ async def test_http_display_clear_drops_the_panel(client) -> None:
     assert resp.status == 200
     await device.expect(P.DisplayClear)
     assert hub.panel is None
+
+
+# --- fake-device end-to-end (UI-BRIEF-16 deliverable) -----------------------
+# A REAL device socket + a REAL LiveSessionManager with a fake Gemini
+# connector: question -> options on screen -> tap index -> the model receives
+# the chosen label and the conversation continues.
+
+
+async def _install_live(client):
+    """Swap the hub's no-key manager for one with a fake Gemini connector."""
+    from types import SimpleNamespace
+
+    import asyncio
+
+    from gemini_live import LiveSessionManager
+    from test_session import FakeConnector, FakeLiveSession, make_config, settle
+
+    hub = _hub(client)
+    cfg = make_config(
+        gemini_api_key="fake-key-for-tests",  # live_enabled follows the key
+    )
+    model = FakeLiveSession()
+    manager = LiveSessionManager(cfg, hub, connector=FakeConnector(model))
+    hub.session = manager
+    return hub, manager, model, asyncio, SimpleNamespace, settle
+
+
+async def test_e2e_tool_pushes_options_onto_the_device_then_a_tap_reaches_the_model(
+    client,
+) -> None:
+    """Trivia flow with the session open: the model's show_options call lands on
+    the screen, and tapping row 2 feeds 'the user chose Mercury' back to it."""
+    hub, manager, model, asyncio, S, settle = await _install_live(client)
+    device = await FakeDevice.connect(client)
+    try:
+        assert await manager.start("trivia") is True
+        await settle()
+
+        # The model asks its question via the tool (this is what the receive
+        # loop would deliver mid-turn).
+        model.emit(
+            S(
+                data=None,
+                server_content=None,
+                tool_call=S(
+                    function_calls=[
+                        S(
+                            name="show_options",
+                            id="call-trivia",
+                            args={
+                                "question": "Which planet is closest to the sun?",
+                                "options": ["Mars", "Venus", "Mercury", "Earth"],
+                            },
+                        )
+                    ]
+                ),
+                go_away=None,
+            )
+        )
+        msg = await device.expect(P.Display)
+        cmd = msg.command
+        assert cmd.type is P.DisplayType.OPTIONS
+        assert cmd.payload["question"] == "Which planet is closest to the sun?"
+        assert [o["label"] for o in cmd.payload["options"]] == [
+            "Mars", "Venus", "Mercury", "Earth",
+        ]
+        assert hub.panel["labels"] == ["Mars", "Venus", "Mercury", "Earth"]
+
+        # The model speaks the question and finishes its turn.
+        model.emit_audio(b"\xaa" * 40)
+        await settle()
+        model.emit_content(turn_complete=True)
+        await settle()
+
+        # The user taps row 2 (0-based) on the device screen.
+        await device.ws.send_str(P.Select(index=2).encode())
+        await device.expect(P.DisplayClear)  # the tap resolves the panel
+        assert hub.panel is None
+
+        # The choice reaches the model as the label, once the turn is over.
+        await asyncio.sleep(0.5)
+        assert model.text_in == ["the user chose Mercury"]
+    finally:
+        await manager.stop("e2e teardown")
+
+
+async def test_e2e_an_idle_tap_on_an_options_panel_opens_a_session_from_context(
+    client,
+) -> None:
+    """No session is open; the options panel is up from an earlier exchange.
+    Tapping row 0 opens a session whose first input names the on-screen
+    question and the tapped label."""
+    hub, manager, model, asyncio, S, settle = await _install_live(client)
+    device = await FakeDevice.connect(client)
+    try:
+        hub.show_options(question="Beach or mountains?", options=["Beach", "Mountains"])
+        await device.expect(P.Display)
+        assert manager.active is False
+
+        await device.ws.send_str(P.Select(index=1).encode())
+        await device.expect(P.DisplayClear)
+        assert manager.active, "an idle select must open a session"
+        assert hub.panel is None
+
+        await asyncio.sleep(0.6)
+        assert model.text_in == [
+            "On-screen question: Beach or mountains? The user tapped Mountains."
+        ]
+    finally:
+        await manager.stop("e2e teardown")

@@ -751,7 +751,11 @@ class Hub:
             return
         self.clear_display()
         if question:
-            text = f"On-screen question: {question}. The user tapped {label}."
+            # The question usually ends in "?" already; don't double-punctuate
+            # when it comes back to the model as a sentence.
+            question = question.rstrip()
+            glue = "" if question[-1:] in ".?!" else "."
+            text = f"On-screen question: {question}{glue} The user tapped {label}."
         else:
             text = f"The user tapped {label} on the on-screen options."
         self.session.choose(text)
