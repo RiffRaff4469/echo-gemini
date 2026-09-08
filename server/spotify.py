@@ -714,12 +714,19 @@ class SpotifyController:
     # --- token ------------------------------------------------------------
 
     async def _librespot_token(self) -> str:
-        """A fresh access token for librespot's command line.
+        """A token for librespot's command line, or "" to run cache-only.
 
-        librespot authenticates once at startup and keeps its own session
-        afterwards, so this only has to be valid at spawn time -- but it has to
-        be valid *then*, which is why it is fetched per attempt rather than once.
+        librespot authenticates once and caches long-lived credentials in
+        ``spotify_creds/librespot/credentials.json``. Once that cache exists it
+        MUST run without ``--access-token``: a token-authed session is
+        force-closed by Spotify's AP the moment it tries to stream audio (the
+        token belongs to a web-API login, not a device credential), while the
+        cached credential streams fine. The token is only the bootstrap for a
+        fresh install.
         """
+        cache = Path(self.cfg.spotify_creds_dir) / "librespot" / "credentials.json"
+        if cache.exists():
+            return ""
         return await self._spawn_tokens.access_token()
 
     # --- device -----------------------------------------------------------
