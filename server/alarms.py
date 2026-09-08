@@ -35,6 +35,7 @@ from protocol import (
     AlarmKind,
     AlarmOp,
     AlarmStateMsg,
+    StopwatchStateMsg,
 )
 
 log = logging.getLogger("echo.alarms")
@@ -321,6 +322,36 @@ def summarise_state(state: AlarmStateMsg, now: datetime | None = None) -> dict[s
     return out
 
 
+def summarise_stopwatch(state: StopwatchStateMsg) -> dict[str, Any]:
+    """Tool response shape for the stopwatch (v1.6).
+
+    The elapsed is a plain ``elapsed_s`` the model can re-read aloud plus the
+    spoken summary; laps arrive as their delta from the previous lap, which is
+    what a person means when they ask \"what were my laps?\".
+    """
+    laps: list[dict[str, Any]] = []
+    prev = 0
+    for lap_ms in state.laps_ms:
+        laps.append({"lap_s": round((lap_ms - prev) / 1000, 1)})
+        prev = lap_ms
+    spoken = (
+        "The stopwatch is running at "
+        + format_duration(state.elapsed_ms / 1000)
+        + ("." if not laps else f" with {len(laps)} lap(s).")
+    ) if state.running else (
+        "The stopwatch is stopped at "
+        + format_duration(state.elapsed_ms / 1000)
+        + ("." if not laps else f" with {len(laps)} lap(s).")
+    )
+    return {
+        "ok": True,
+        "running": state.running,
+        "elapsed_s": round(state.elapsed_ms / 1000, 1),
+        "laps": laps,
+        "summary": spoken,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Command / ack round trip
 # ---------------------------------------------------------------------------
@@ -344,6 +375,11 @@ class AlarmCoordinator:
         self._timeout_s = timeout_s
         self._pending: dict[str, asyncio.Future[AlarmStateMsg]] = {}
         self.last_state: AlarmStateMsg | None = None
+        # Stopwatch acks (v1.6, CLOCK-BRIEF-STOPWATCH) answer as
+        # StopwatchStateMsg rather than AlarmStateMsg, so they wait on their own
+        # map; the device pushes one on every transition.
+        self._sw_pending: dict[str, asyncio.Future[StopwatchStateMsg]] = {}
+        self.last_stopwatch: StopwatchStateMsg | None = None
 
     def on_state(self, state: AlarmStateMsg) -> None:
         """Called by the hub for every ``alarm_state`` the device sends.
@@ -356,6 +392,17 @@ class AlarmCoordinator:
         if future is not None and not future.done():
             future.set_result(state)
 
+    def on_stopwatch_state(self, state: StopwatchStateMsg) -> None:
+        """Called by the hub for every ``stopwatch_state`` push (v1.6).
+
+        Unsolicited pushes (the user touched the panel) carry no ``req_id`` and
+        simply refresh the cached stopwatch.
+        """
+        self.last_stopwatch = state
+        future = self._sw_pending.pop(state.req_id, None) if state.req_id else None
+        if future is not None and not future.done():
+            future.set_result(state)
+
     def disconnected(self) -> None:
         """Do not confirm requests or retain cached state across device replacement."""
         self.last_state = None
@@ -363,6 +410,50 @@ class AlarmCoordinator:
             if not future.done():
                 future.set_exception(DeviceOffline("The display disconnected; the change was not confirmed."))
         self._pending.clear()
+        self.last_stopwatch = None
+        for future in self._sw_pending.values():
+            if not future.done():
+                future.set_exception(DeviceOffline("The display disconnected; the stopwatch state is unknown."))
+        self._sw_pending.clear()
+
+    async def request_stopwatch(self, op: AlarmOp) -> StopwatchStateMsg:
+        """Send a stopwatch op and wait for its ``stopwatch_state`` ack (v1.6)."""
+        req_id = uuid.uuid4().hex[:12]
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[StopwatchStateMsg] = loop.create_future()
+        self._sw_pending[req_id] = future
+        command = AlarmCommand(op=op, req_id=req_id)
+        try:
+            if not self._send(command):
+                raise DeviceOffline(
+                    "The display is not connected, so the stopwatch could not be reached."
+                )
+            return await asyncio.wait_for(future, timeout=self._timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise AckTimeout(
+                "The display did not confirm the stopwatch change within "
+                f"{self._timeout_s:g} seconds."
+            ) from exc
+        finally:
+            self._sw_pending.pop(req_id, None)
+
+    # --- stopwatch conveniences (v1.6, CLOCK-BRIEF-STOPWATCH) ----------------
+
+    async def stopwatch_start(self) -> StopwatchStateMsg:
+        return await self.request_stopwatch(AlarmOp.STOPWATCH_START)
+
+    async def stopwatch_pause(self) -> StopwatchStateMsg:
+        return await self.request_stopwatch(AlarmOp.STOPWATCH_PAUSE)
+
+    async def stopwatch_reset(self) -> StopwatchStateMsg:
+        return await self.request_stopwatch(AlarmOp.STOPWATCH_RESET)
+
+    async def stopwatch_lap(self) -> StopwatchStateMsg:
+        return await self.request_stopwatch(AlarmOp.STOPWATCH_LAP)
+
+    async def stopwatch_status(self) -> StopwatchStateMsg:
+        """Fresh status via a round trip (the cached push may be stale)."""
+        return await self.request_stopwatch(AlarmOp.STOPWATCH_STATUS)
 
     async def request(self, command: AlarmCommand) -> AlarmStateMsg:
         """Send ``command`` and wait for its acknowledgement.

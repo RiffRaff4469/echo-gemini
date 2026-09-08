@@ -36,6 +36,7 @@ from alarms import (
     resolve_alarm_time,
     resolve_duration,
     summarise_state,
+    summarise_stopwatch,
 )
 from config import Config
 from protocol import AUDIO_UP_RATE, VIDEO_MIME, AlarmKind, CameraStatus, UiState
@@ -59,6 +60,13 @@ CANCEL_ALARM_TOOL = "cancel_alarm"
 CANCEL_TIMER_TOOL = "cancel_timer"
 LIST_ALARMS_TOOL = "list_alarms"
 
+# Stopwatch (v1.6, CLOCK-BRIEF-STOPWATCH).
+START_STOPWATCH_TOOL = "start_stopwatch"
+STOP_STOPWATCH_TOOL = "stop_stopwatch"
+LAP_STOPWATCH_TOOL = "lap_stopwatch"
+RESET_STOPWATCH_TOOL = "reset_stopwatch"
+STOPWATCH_STATUS_TOOL = "stopwatch_status"
+
 _ALARM_TOOLS = frozenset(
     {
         SET_ALARM_TOOL,
@@ -66,6 +74,13 @@ _ALARM_TOOLS = frozenset(
         CANCEL_ALARM_TOOL,
         CANCEL_TIMER_TOOL,
         LIST_ALARMS_TOOL,
+        # Stopwatch (v1.6, CLOCK-BRIEF-STOPWATCH): the device owns the clock;
+        # these are the voice intents.
+        START_STOPWATCH_TOOL,
+        STOP_STOPWATCH_TOOL,
+        LAP_STOPWATCH_TOOL,
+        RESET_STOPWATCH_TOOL,
+        STOPWATCH_STATUS_TOOL,
     }
 )
 
@@ -122,6 +137,16 @@ class SessionSink(Protocol):
 
 class LiveUnavailable(RuntimeError):
     """Raised when a session is requested but no API key is configured."""
+
+
+def _nullary_declaration(name: str, description: str, types: Any) -> Any:
+    """A function declaration that takes no arguments (module-level so both
+    declaration builders can share it)."""
+    return types.FunctionDeclaration(
+        name=name,
+        description=description,
+        parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+    )
 
 
 def _alarm_declarations() -> list[Any]:
@@ -241,6 +266,36 @@ def _alarm_declarations() -> list[Any]:
                 "than relying on what was said earlier in the conversation."
             ),
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        # Stopwatch (v1.6, CLOCK-BRIEF-STOPWATCH): the device owns the running
+        # clock -- these relay intent and confirm from the device's own state.
+        _nullary_declaration(
+            START_STOPWATCH_TOOL,
+            "Start the stopwatch counting up. No-op with a spoken confirmation "
+            "if it is already running.",
+            types,
+        ),
+        _nullary_declaration(
+            STOP_STOPWATCH_TOOL,
+            "Pause the stopwatch, keeping the elapsed time. Answer with the "
+            "stopped time.",
+            types,
+        ),
+        _nullary_declaration(
+            LAP_STOPWATCH_TOOL,
+            "Record a lap on the running stopwatch. Answer with the lap time.",
+            types,
+        ),
+        _nullary_declaration(
+            RESET_STOPWATCH_TOOL,
+            "Reset the stopwatch to zero and clear its laps.",
+            types,
+        ),
+        _nullary_declaration(
+            STOPWATCH_STATUS_TOOL,
+            "Read the stopwatch: running or stopped, elapsed time, lap count. "
+            "Call before answering any question about the stopwatch.",
+            types,
         ),
     ]
 
@@ -1190,7 +1245,16 @@ class LiveSessionManager:
             log.exception("alarm tool %s crashed", name)
             return {"error": "Something went wrong talking to the display."}
 
-        summary = summarise_state(state)
+        if name in {
+            START_STOPWATCH_TOOL,
+            STOP_STOPWATCH_TOOL,
+            LAP_STOPWATCH_TOOL,
+            RESET_STOPWATCH_TOOL,
+            STOPWATCH_STATUS_TOOL,
+        }:
+            summary = summarise_stopwatch(state)
+        else:
+            summary = summarise_state(state)
         log.info("alarm tool %s -> %s", name, summary["summary"])
         return summary
 
@@ -1235,6 +1299,17 @@ class LiveSessionManager:
                 label=str(args.get("label") or ""),
                 kind=kind,
             )
+
+        if name == START_STOPWATCH_TOOL:
+            return await coordinator.stopwatch_start()
+        if name == STOP_STOPWATCH_TOOL:
+            return await coordinator.stopwatch_pause()
+        if name == LAP_STOPWATCH_TOOL:
+            return await coordinator.stopwatch_lap()
+        if name == RESET_STOPWATCH_TOOL:
+            return await coordinator.stopwatch_reset()
+        if name == STOPWATCH_STATUS_TOOL:
+            return await coordinator.stopwatch_status()
 
         return await coordinator.list_all()
 

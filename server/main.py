@@ -393,6 +393,16 @@ class Hub:
                 "" if msg.exact_allowed else " [device cannot schedule exact alarms]",
                 f" error={msg.error}" if msg.error else "",
             )
+        elif isinstance(msg, P.StopwatchStateMsg):
+            # v1.6 stopwatch mirror: the device owns the clock; this refreshes
+            # the cache and answers any in-flight voice tool round trip.
+            self.alarms.on_stopwatch_state(msg)
+            log.info(
+                "stopwatch state: %s at %d ms with %d lap(s)",
+                "running" if msg.running else "stopped",
+                msg.elapsed_ms,
+                len(msg.laps_ms),
+            )
         elif isinstance(msg, P.AlarmFired):
             await self._on_alarm_fired(msg)
         elif isinstance(msg, P.DeviceLog):

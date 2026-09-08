@@ -110,6 +110,7 @@ class MsgType(str, Enum):
     ERROR = "error"
     ALARM_STATE = "alarm_state"  # v1.1
     ALARM_FIRED = "alarm_fired"  # v1.1
+    STOPWATCH_STATE = "stopwatch_state"  # v1.6, device -> server
     MEDIA_CONTROL = "media_control"  # v1.5
 
     # server -> device
@@ -177,12 +178,19 @@ class AlarmOp(str, Enum):
     Every op is applied on-device. The server is a convenience, never a
     dependency: alarms and timers keep working with the PC switched off, which
     is the whole point of scheduling them locally (BUILD-BRIEF-3 section 1).
+    The stopwatch ops (v1.6, CLOCK-BRIEF-STOPWATCH) ride the same channel: the
+    device owns the running clock, the server only relays voice intents.
     """
 
     SET_ALARM = "set_alarm"
     SET_TIMER = "set_timer"
     CANCEL = "cancel"
     LIST = "list"
+    STOPWATCH_START = "stopwatch_start"
+    STOPWATCH_PAUSE = "stopwatch_pause"
+    STOPWATCH_RESET = "stopwatch_reset"
+    STOPWATCH_LAP = "stopwatch_lap"
+    STOPWATCH_STATUS = "stopwatch_status"
 
 
 class AlarmKind(str, Enum):
@@ -965,6 +973,30 @@ class AlarmFired(Message):
         return {"kind": self.kind.value, "id": self.id, "label": self.label}
 
 
+@dataclass
+class StopwatchStateMsg(Message):
+    """device -> server: the stopwatch, on every transition (v1.6).
+
+    Pushed on start/pause/reset/lap -- never ticked every second. The device
+    owns the running clock; this is the mirror the voice tools answer from.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.STOPWATCH_STATE
+
+    running: bool = False
+    elapsed_ms: int = 0
+    laps_ms: list[int] = field(default_factory=list)
+    req_id: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "running": self.running,
+            "elapsed_ms": self.elapsed_ms,
+            "laps_ms": self.laps_ms,
+            "req_id": self.req_id,
+        }
+
+
 _DECODERS: dict[str, Any] = {}
 
 
@@ -995,6 +1027,7 @@ for _cls in (
     AlarmCommand,
     AlarmStateMsg,
     AlarmFired,
+    StopwatchStateMsg,
     Button,
     Mute,
 ):
@@ -1191,6 +1224,22 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             kind=kind,
             id=str(data.get("id", "")),
             label=str(data.get("label", "")),
+            ts=ts,
+        )
+    if cls is StopwatchStateMsg:
+        laps = data.get("laps_ms", [])
+        if not isinstance(laps, list) or not all(
+            isinstance(x, int) and x >= 0 for x in laps
+        ):
+            raise ProtocolError("stopwatch_state.laps_ms must be a list of ms")
+        elapsed = data.get("elapsed_ms", 0)
+        if isinstance(elapsed, bool) or not isinstance(elapsed, int) or elapsed < 0:
+            raise ProtocolError("stopwatch_state.elapsed_ms must be ms >= 0")
+        return StopwatchStateMsg(
+            running=bool(data.get("running", False)),
+            elapsed_ms=elapsed,
+            laps_ms=[int(x) for x in laps],
+            req_id=str(data.get("req_id", "")),
             ts=ts,
         )
     raise ProtocolError(f"no decoder wired for {cls.__name__}")
