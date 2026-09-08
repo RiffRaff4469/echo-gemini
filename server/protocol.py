@@ -126,6 +126,7 @@ class MsgType(str, Enum):
     WEATHER = "weather"  # v1.2
     SESSION_QUIET = "session_quiet"  # v1.3
     MUTE = "mute"  # v1.6: voice-initiated mute (server -> device)
+    LAYOUT = "layout"  # v1.6: focus-driven layout engine (UI-BRIEF-14)
 
 
 class UiState(str, Enum):
@@ -135,6 +136,14 @@ class UiState(str, Enum):
     LISTENING = "listening"
     THINKING = "thinking"
     SPEAKING = "speaking"
+
+
+class LayoutFocus(str, Enum):
+    """Which layout template the home screen should show (UI-BRIEF-14)."""
+
+    HOME = "home"
+    MUSIC = "music"
+    CHAT = "chat"
 
 
 class CameraStatus(str, Enum):
@@ -997,6 +1006,23 @@ class StopwatchStateMsg(Message):
         }
 
 
+@dataclass
+class LayoutMsg(Message):
+    """server -> device: which layout template to show (UI-BRIEF-14, v1.6).
+
+    Carries the full focus, never a delta: ``home`` | ``music`` | ``chat``.
+    The device rearranges its single DOM around the template; a missing or
+    unknown focus falls back to ``home``.
+    """
+
+    TYPE: ClassVar[MsgType] = MsgType.LAYOUT
+
+    focus: LayoutFocus = LayoutFocus.HOME
+
+    def fields(self) -> dict[str, Any]:
+        return {"focus": self.focus.value}
+
+
 _DECODERS: dict[str, Any] = {}
 
 
@@ -1030,6 +1056,7 @@ for _cls in (
     StopwatchStateMsg,
     Button,
     Mute,
+    LayoutMsg,
 ):
     _register(_cls)
 
@@ -1242,4 +1269,10 @@ def _build(cls: type[Message], data: dict[str, Any], ts: int) -> Message:
             req_id=str(data.get("req_id", "")),
             ts=ts,
         )
+    if cls is LayoutMsg:
+        try:
+            focus = LayoutFocus(data.get("focus", "home"))
+        except ValueError:
+            focus = LayoutFocus.HOME
+        return LayoutMsg(focus=focus, ts=ts)
     raise ProtocolError(f"no decoder wired for {cls.__name__}")

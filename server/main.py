@@ -183,11 +183,18 @@ class Hub:
         self.cfg = cfg
         self.link: DeviceLink | None = None
         self.started_at = time.time()
+        # Layout focus (UI-BRIEF-14): chat while a session runs, music while
+        # the display's speaker has a now-playing card, else home.
+        self._last_focus: P.LayoutFocus | None = None
+        self._music_card = False
         # Privacy mute mirror (v1.6): the DEVICE owns the real gate (audio
         # never leaves it); this flag mirrors it so the wake path here cannot
         # act on audio the device already stopped sending. Synced from the
         # device's hello caps (it persists mute across reboots).
         self.muted = False
+
+        self._last_focus: P.LayoutFocus | None = None
+        self._music_card = False
 
         self.wake = WakeWordEngine(
             build_detector(
@@ -212,6 +219,7 @@ class Hub:
                 on_pcm=self.push_music_audio,
                 push_card=self.push_display,
                 clear_card=self.clear_display,
+                on_card_change=self._on_music_card,
             )
             if cfg.spotify_enabled
             else None
@@ -318,6 +326,31 @@ class Hub:
     async def set_state(self, state: UiState) -> None:
         if self.link:
             self.link.send_msg(P.StateMsg(state=state))
+        # A session starting or ending changes the layout focus (UI-BRIEF-14).
+        self._maybe_push_layout()
+
+    # --- layout focus (UI-BRIEF-14) -----------------------------------------
+
+    def _on_music_card(self, active: bool) -> None:
+        """The display's speaker card appeared or cleared -> re-evaluate."""
+        self._music_card = active
+        self._maybe_push_layout()
+
+    def _current_focus(self) -> P.LayoutFocus:
+        if self.session.active:
+            return P.LayoutFocus.CHAT
+        if self._music_card:
+            return P.LayoutFocus.MUSIC
+        return P.LayoutFocus.HOME
+
+    def _maybe_push_layout(self) -> None:
+        """Push ``layout`` only when the focus actually changed."""
+        focus = self._current_focus()
+        if focus == self._last_focus:
+            return
+        self._last_focus = focus
+        if self.link:
+            self.link.send_msg(P.LayoutMsg(focus=focus))
 
     async def set_mic(self, enabled: bool) -> None:
         if self.link:
@@ -452,6 +485,10 @@ class Hub:
         # Mute is device-owned and persists across reboots; a device that
         # boots muted announces it in caps so the server mirror starts right.
         self.muted = bool(msg.capabilities.get("muted", False))
+
+        # Greet a fresh device with the current layout focus (UI-BRIEF-14).
+        self._last_focus = None
+        self._maybe_push_layout()
 
         log.info(
             "device %s (app %s, protocol v%d.%d) connected from %s; caps=%s",

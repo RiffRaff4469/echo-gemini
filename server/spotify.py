@@ -557,6 +557,7 @@ class SpotifyController:
         on_pcm: Callable[[bytes], None],
         push_card: Callable[[DisplayCommand], None],
         clear_card: Callable[[], None],
+        on_card_change: Callable[[bool], None] | None = None,
         api: WebApi | None = None,
         supervisor: LibrespotSupervisor | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -565,6 +566,7 @@ class SpotifyController:
         self._on_pcm = on_pcm
         self._push_card = push_card
         self._clear_card = clear_card
+        self._on_card_change = on_card_change
         self._clock = clock
 
         self.tokens = TokenStore(
@@ -1063,6 +1065,7 @@ class SpotifyController:
                 self._card_showing = False
                 self._card_fingerprint = None
                 self._clear_card()
+                self._note_card(False)
             return
 
         # Progress is bucketed so a playing track re-pushes about once per poll
@@ -1092,6 +1095,16 @@ class SpotifyController:
                 priority=self.cfg.spotify_card_priority,
             )
         )
+        self._note_card(True)
+
+    def _note_card(self, active: bool) -> None:
+        """Notify the host that the display's speaker card appeared/cleared
+        (used for the focus-driven layout, UI-BRIEF-14)."""
+        if self._on_card_change is not None:
+            try:
+                self._on_card_change(active)
+            except Exception:
+                log.exception("card-change hook failed")
 
     async def _art_url(self, now: NowPlaying) -> str:
         if not now.art_url:
