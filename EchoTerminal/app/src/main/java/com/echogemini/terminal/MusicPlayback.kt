@@ -136,12 +136,19 @@ class MusicPlayback {
     fun enqueue(pcm: ByteArray) {
         if (!running || pcm.isEmpty()) return
         if (!queue.offer(pcm)) {
-            // The server is sending faster than this can play, which means the
-            // link caught up after a stall. Dropping the newest keeps what is
-            // already queued in order.
-            dropped++
-            if (dropped % 100 == 1L) {
-                Log.w(TAG, "music queue full; dropped $dropped chunks")
+            // The server is sending faster than this can play, which means
+            // the link caught up after a stall. Drop the OLDEST chunk so the
+            // queue always holds the freshest audio: a pause command then
+            // lands within one buffer's worth, and what plays out after a
+            // stall is the recent past, not the distant one.
+            queue.poll()
+            if (!queue.offer(pcm)) {
+                // Should not happen (a poll just freed a slot), but a racing
+                // flush can empty-then-refill between the two calls.
+                dropped++
+                if (dropped % 100 == 1L) {
+                    Log.w(TAG, "music queue full; dropped $dropped chunks")
+                }
             }
         }
     }

@@ -589,6 +589,38 @@ async def test_pcm_flows_from_the_pipe_through_the_converter():
     assert len(b"".join(got)) < len(frames)  # 44.1 kHz stereo -> 24 kHz mono
 
 
+async def test_the_pipe_is_drained_at_real_time_not_at_decode_speed():
+    """The reader must pace itself or a track is burnt in seconds (owner
+    choppy-audio report): 8 chunks of 50 ms each = 400 ms of audio, and the
+    fake pipe hands it over instantly, the way a decoder far ahead of real
+    time does. Draining at 1x must spread the sink deliveries over roughly
+    that wall time instead of finishing in a few milliseconds."""
+    import struct
+    import time
+
+    chunk = b"".join(struct.pack("<hh", 1000, 1000) for _ in range(4_410))
+    expected = 8
+    proc = FakeProcess(chunk * expected)
+    sup = _supervisor(popen=lambda *a, **k: proc)
+    got: list[bytes] = []
+    sup._on_pcm = got.append
+
+    t0 = time.monotonic()
+    await sup.start()
+    for _ in range(400):  # 8 s ceiling; normally ~0.4 s
+        if len(got) >= expected:
+            break
+        await asyncio.sleep(0.02)
+    elapsed = time.monotonic() - t0
+    await sup.stop()
+
+    assert len(got) >= expected, f"only {len(got)} of {expected} chunks drained"
+    # Every 50 ms chunk yields ~4_800 bytes of 24 kHz mono. The generous
+    # bounds absorb Windows timer-quantum jitter and a loaded machine; the
+    # point is the order of magnitude -- hundreds of ms, not tens.
+    assert 0.15 <= elapsed <= 4.0, f"drain took {elapsed:.2f}s for 0.4s of audio"
+
+
 async def test_a_crashed_librespot_is_restarted():
     procs: list[FakeProcess] = []
 
