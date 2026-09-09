@@ -528,3 +528,103 @@ button.chip:active{ background:rgba(255,255,255,0.16); }
   font-size:22px; font-weight:350;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
+
+/* ============================================================ MUSIC PAGE ==
+   Owner round-1: the full now-playing surface opened from the rail chip and
+   used as the landing page when a conversation ends while music is up.
+   Same visual language as the chat-hero now-playing overlay, sized for the
+   65/35-less full page. */
+.music-page{
+  flex:1; display:flex; align-items:center; justify-content:center;
+  gap:44px; padding:0 56px; box-sizing:border-box; min-width:0;
+}
+.m-art{
+  width:224px; height:224px; flex:0 0 224px; border-radius:16px;
+  background:rgba(255,255,255,0.06);
+  box-shadow:0 14px 36px rgba(0,0,0,0.5);
+  overflow:hidden; display:flex; align-items:center; justify-content:center;
+}
+.m-art img{ width:100%; height:100%; object-fit:cover; display:block; }
+.m-art .np-noart svg{ width:72px; height:72px; fill:rgba(255,255,255,0.20); }
+.m-meta{ flex:1 1 auto; min-width:0; }
+.m-meta .np-title{ font-size:46px; }
+.m-meta .np-artist{ font-size:26px; }
+.m-meta .np-album{ font-size:18px; }
+.m-meta .card-bar{ width:100%; margin-top:14px; }
+.m-meta .np-times{ font-size:15px; }
+
+/* ---------------------------------------------------- owner color pass ---
+   More colour on the home/rail: each widget gets a soft accent wash, its
+   chevron and markers take the accent colour, and the status chips carry a
+   coloured dot. All pure CSS -- no assets, no per-frame repaints. */
+.rail-card{
+  background:linear-gradient(120deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+}
+.rail-weather{
+  background:linear-gradient(120deg, rgba(79,140,255,0.16), rgba(79,140,255,0.04) 58%, rgba(255,255,255,0.02));
+  border-color:rgba(111,162,255,0.30);
+}
+.rail-weather .wtemp{ color:#ffd9a0; }
+.rail-weather .wcond{ color:rgba(210,226,255,0.72); }
+.rail-weather .wico{ filter:drop-shadow(0 0 7px rgba(255,180,84,0.28)); }
+.rail-world{
+  background:linear-gradient(120deg, rgba(176,107,255,0.15), rgba(176,107,255,0.03) 58%, rgba(255,255,255,0.02));
+  border-color:rgba(197,143,255,0.28);
+}
+.rail-world-label{ color:#cdabff; }
+.rail-world .wc-code{ color:rgba(205,171,255,0.75); }
+.rail-go{ transition:color .15s ease, transform .15s ease; }
+.rail-weather .rail-go{ color:rgba(111,162,255,0.85); }
+.rail-world .rail-go{ color:rgba(197,143,255,0.9); }
+.rail-card:active .rail-go{ transform:translateX(2px); }
+.rail-card:active{ filter:brightness(1.12); }
+
+.chip{
+  background:rgba(151,170,205,0.10);
+  border-color:rgba(180,196,225,0.18);
+  backdrop-filter:blur(2px);
+}
+/* Accent dot per clock-suite chip: alarms amber, timers blue, stopwatch
+   green (green only while it is actually running; idle it is a neutral
+   tick). */
+#alarm-chip::before{
+  content:''; flex:0 0 auto; width:7px; height:7px; border-radius:50%;
+  background:var(--amber); box-shadow:0 0 7px rgba(255,180,84,0.75);
+}
+#timer-chip::before{
+  content:''; flex:0 0 auto; width:7px; height:7px; border-radius:50%;
+  background:var(--blue); box-shadow:0 0 7px rgba(79,140,255,0.75);
+}
+#stopwatch-chip::before{
+  content:''; flex:0 0 auto; width:7px; height:7px; border-radius:50%;
+  background:rgba(255,255,255,0.28); box-shadow:none;
+  transition:background .2s ease, box-shadow .2s ease;
+}
+#stopwatch-chip.running::before{
+  background:var(--green); box-shadow:0 0 7px rgba(53,211,153,0.8);
+}
+
+/* The np chip glows green while audio is actually flowing and goes quiet
+   when paused; the trailing chevron says "tap me". */
+.np-chip:not(.paused){
+  background:rgba(53,211,153,0.12);
+  border-color:rgba(53,211,153,0.32);
+}
+.np-chip.paused{ background:rgba(151,170,205,0.10); border-color:rgba(180,196,225,0.18); }
+.np-chip.paused .np-text{ color:rgba(232,238,247,0.62); }
+.np-go{
+  flex:0 0 auto; color:var(--green); font-size:16px; line-height:1;
+  opacity:.85; transition:transform .15s ease;
+}
+.np-chip:active .np-go{ transform:translateX(2px); }
+.np-chip.paused .np-go{ color:var(--ink-faint); }
+
+.mute-chip{ background:rgba(255,92,92,0.10); }
+
+/* The slim time line on the weather page (ambient rotation keeps the time
+   visible while the full-screen weather is up). */
+.wx-now{
+  margin-top:12px; font-size:13px; color:rgba(210,226,255,0.78);
+  font-variant-numeric:tabular-nums; letter-spacing:.02em;
+}
+.wx-hilo span b{ color:#ffd9a0; }
