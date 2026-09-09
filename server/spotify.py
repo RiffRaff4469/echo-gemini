@@ -62,6 +62,14 @@ log = logging.getLogger("echo.spotify")
 # large enough that the reader thread is not woken a thousand times a second.
 PIPE_READ_BYTES = 8_820
 
+# Real-time drain target for the pipe, in bytes of 44.1 kHz stereo PCM16 per
+# second. librespot's pipe backend does NOT pace itself: StdoutSink writes as
+# fast as the decoder produces, so an undrained pipe lets it burn a whole
+# track in seconds (and flood the device link -- the root cause of the
+# 2026-09-08 choppy-audio report). Draining at ~1x keeps the OS pipe full and
+# librespot's writer blocked on it, and that backpressure is the pacemaker.
+PIPE_BYTES_PER_S = LIBRESPOT_RATE * LIBRESPOT_CHANNELS * 2  # 176_400
+
 # How long after the last PCM chunk music is still considered to be playing.
 # Used to answer "was it playing before this session started?" without a Web API
 # round trip on the wake-word path.
@@ -434,10 +442,19 @@ class LibrespotSupervisor:
         ).start()
 
     def _read_audio(self, proc: Any, converter: PcmConverter, loop: Any) -> None:
-        """Pipe -> resampler -> event loop. Runs on its own thread, forever."""
+        """Pipe -> resampler -> event loop. Runs on its own thread, forever.
+
+        Paced to real time: after each chunk the thread sleeps for the wall
+        time that chunk of audio represents, so the average drain rate is 1x
+        no matter how far ahead librespot's decoder is. The sleep is bounded
+        by a deadline that also absorbs the read's own blocking time -- when
+        librespot refills slowly the read waits and the deadline falls behind,
+        so the sleep is skipped and nothing accumulates.
+        """
         stream = proc.stdout
         if stream is None:
             return
+        deadline = 0.0
         try:
             while True:
                 chunk = stream.read(PIPE_READ_BYTES)
@@ -446,6 +463,14 @@ class LibrespotSupervisor:
                 pcm = converter.feed(chunk)
                 if pcm:
                     loop.call_soon_threadsafe(self._on_pcm, pcm)
+                # A partial read (Windows returns what the pipe has, not what
+                # was asked for) simply represents less audio; the accounting
+                # is in bytes read, so it stays exact either way.
+                now = time.monotonic()
+                deadline = max(deadline, now) + len(chunk) / PIPE_BYTES_PER_S
+                delay = deadline - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
         except (ValueError, OSError):
             return  # the pipe closed under us: the process is gone
         except Exception:
