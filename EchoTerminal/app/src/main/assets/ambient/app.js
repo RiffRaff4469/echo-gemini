@@ -51,11 +51,13 @@
   // ------------------------------------------------------- layout engine
   // The server owns the focus (protocol v1.6 layout message): home is the
   // resting surface, chat while a session runs, music while the display's
-  // speaker card is up. Music still renders as the home template -- the
-  // now-playing chip -- never as a takeover (owner home model spec).
-  // Detail pages (weather/world/...) are pure local navigation on top.
+  // speaker card is up. Music renders as the now-playing chip on the home;
+  // tapping the chip (or a chat ending while music is up, focus = music)
+  // opens the full music page -- a normal detail page that closes back to
+  // the home (owner round-1).
+  // Detail pages (weather/world/music/...) are pure local navigation on top.
   var PAGE_LABELS = {
-    home: 'Home', weather: 'Weather', world: 'World Clock',
+    home: 'Home', weather: 'Weather', world: 'World Clock', music: 'Now Playing',
     scores: 'Scores', flights: 'Overhead', news: 'News', stocks: 'Markets'
   };
   var FULL_PAGES = ['weather', 'world', 'scores', 'flights', 'news', 'stocks'];
@@ -66,6 +68,8 @@
 
   function openPage(id) {
     if (!PAGE_LABELS[id]) id = 'home';
+    var enteringMusic = id === 'music';
+    var leavingMusic = current === 'music' && !enteringMusic;
     current = id;
     var pages = document.querySelectorAll('.page');
     for (var k = 0; k < pages.length; k++) {
@@ -74,6 +78,14 @@
     $('page-label').textContent = PAGE_LABELS[id];
     $('page-back').classList.toggle('hidden', id === 'home');
     if (id === 'world') drawWorld();
+    if (enteringMusic) {
+      musicOpen = true;
+      drawMusicPage(true);
+      kickNpTick();
+    } else if (leavingMusic) {
+      musicOpen = false;
+      kickNpTick();   // no visible progress surface: the ticker stops itself
+    }
   }
 
   // ---------------------------------------------------------------- focus
@@ -91,6 +103,22 @@
     var cls = document.body.classList;
     cls.remove('fx-home', 'fx-music', 'fx-chat');
     cls.add('fx-' + focus);
+    // Music is the landing surface when a conversation ends while the
+    // speaker card is still up (owner round-1): arrive on the full music
+    // page. Plain phone-side starts still keep the chip on the home -- only
+    // a focus that follows the end of a conversation within a beat lands
+    // here, and only if the user has not navigated somewhere meanwhile.
+    if (next === 'music') {
+      if (uiState === 'idle' && current === 'home' &&
+          Date.now() - endOfConvoAt < 3000 &&
+          !npChipEl.classList.contains('hidden')) {
+        openPage('music');
+      }
+    } else if (next === 'home' && current === 'music') {
+      // The speaker card cleared (music stopped) while the page was up.
+      openPage('home');
+    }
+    if (next !== 'chat') touchIdle();
   }
 
   // ---------------------------------------------------------------- clock
@@ -392,13 +420,16 @@
   }
 
   // Progress as the page last understood it. The bar is advanced locally
-  // between pushes so it creeps rather than jumping every five seconds; the
+  // between pushes so it creeps rather than jumping every few seconds; the
   // server's next push is always what corrects it.
   var npProgress = 0;
   var npDuration = 0;
   var npPlaying = false;
+  var npLast = null;     // the last full now_playing payload, for the music page
+  var npTickTimer = null;
 
   function applyNowPlaying(p) {
+    npLast = p;
     npDuration = Math.max(0, p.duration_s || 0);
     npProgress = Math.min(Math.max(0, p.progress_s || 0), npDuration || Infinity);
     npPlaying = p.is_playing !== false;
@@ -407,8 +438,21 @@
     var duration = $('np-dur');
     if (duration) duration.textContent = clockText(npDuration);
     drawNowPlaying();
-    if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
-    if (npPlaying && npDuration > 0) npTick();
+    if (musicOpen && current === 'music') drawMusicPage();
+    kickNpTick();
+  }
+
+  /** Absorb a now_playing push that arrived while the display is idle. */
+  function absorbIdleNp(p) {
+    npLast = p;
+    npDuration = Math.max(0, p.duration_s || 0);
+    npProgress = Math.min(Math.max(0, p.progress_s || 0), npDuration || Infinity);
+    npPlaying = p.is_playing !== false;
+    if (musicOpen && current === 'music') drawMusicPage();
+    // Music arriving is engagement, and it must not hide behind an ambient
+    // page: drop any rotation and reset the idle clock.
+    touchIdle();
+    kickNpTick();
   }
 
   function drawNowPlaying() {
@@ -421,19 +465,77 @@
     if (pos) pos.textContent = clockText(npProgress);
   }
 
-  function npTick() {
-    cardTimer = setTimeout(function () {
-      if (!cardShowing || !npPlaying) return;
-      npProgress = Math.min(npProgress + 1, npDuration);
-      drawNowPlaying();
-      npTick();
-    }, 1000);
+  /**
+   * (Re)arm the once-per-second progress ticker, but only while a surface
+   * that shows progress (the chat-hero card or the music page) is actually
+   * visible. Owns its own timer so it never collides with card countdowns.
+   */
+  function kickNpTick() {
+    if (npTickTimer) { clearTimeout(npTickTimer); npTickTimer = null; }
+    if (!npPlaying || npDuration <= 0) return;
+    if ((cardShowing && cardType === 'now_playing') ||
+        (current === 'music' && musicOpen)) {
+      npTickTimer = setTimeout(npTickOnce, 1000);
+    }
+  }
+
+  function npTickOnce() {
+    npTickTimer = null;
+    if (!npPlaying || npDuration <= 0) return;
+    if (!((cardShowing && cardType === 'now_playing') ||
+          (current === 'music' && musicOpen))) return;  // nothing visible: stop
+    npProgress = Math.min(npProgress + 1, npDuration);
+    drawNowPlaying();
+    if (current === 'music') drawMusicPage();
+    npTickTimer = setTimeout(npTickOnce, 1000);
+  }
+
+  // ------------------------------------------------------- music page
+  // The full now-playing surface (owner round-1). It is an ordinary detail
+  // page: opened by tapping the rail chip, and auto-opened when layout
+  // focus = music lands on an idle home right after a conversation ends.
+  // Same payload language as the chat-hero card; the transport row sends
+  // the same media_control messages (handled document-wide, below).
+  var musicOpen = false;
+  var mTitle = $('m-title'), mArtist = $('m-artist'), mAlbum = $('m-album'),
+      mArt = $('m-art'), mBar = $('m-bar'), mPos = $('m-pos'),
+      mDur = $('m-dur'), mToggle = $('m-toggle');
+  var npPageKey = '';    // the track identity the page last fully rendered
+
+  function musicKey(p) {
+    if (!p) return '';
+    return ((p.title || '') + '\u0000' + (p.artist || '') + '\u0000' +
+            (p.art_url || ''));
+  }
+
+  function musicProgressPct() {
+    return (npDuration > 0 ? Math.min(100, npProgress / npDuration * 100) : 0).toFixed(1) + '%';
+  }
+
+  function drawMusicPage(force) {
+    if (npLast && musicKey(npLast) !== npPageKey) force = true;
+    if (force) {
+      npPageKey = musicKey(npLast);
+      mTitle.textContent = (npLast && npLast.title) ? npLast.title : 'Nothing playing';
+      mArtist.textContent = (npLast && npLast.artist) ? npLast.artist : '';
+      mAlbum.textContent = (npLast && npLast.album) ? npLast.album : '';
+      mArt.innerHTML = (npLast && npLast.art_url)
+        ? '<img src="' + escapeHtml(npLast.art_url) + '" alt="">'
+        : '<div class="np-noart">' + icon('play') + '</div>';
+      mDur.textContent = clockText(npDuration);
+    } else {
+      mDur.textContent = clockText(npDuration);
+    }
+    mPos.textContent = clockText(npProgress);
+    mBar.style.width = musicProgressPct();
+    mToggle.innerHTML = icon(npPlaying ? 'pause' : 'play');
   }
 
   // ------------------------------------------------------ rail np chip
   // The home-model form of now playing: one clipped "title — artist" line
   // with an equaliser dot. Kept in sync by every now_playing push, shown
-  // only while the speaker card is up, hidden by display_clear.
+  // only while the speaker card is up, hidden by display_clear. A button:
+  // tapping it opens the full music page.
   var npChipEl = $('np-chip');
   var npChipText = $('np-chip-text');
 
@@ -447,6 +549,8 @@
   function hideRailNp() {
     npChipEl.classList.add('hidden');
     npChipText.textContent = '\u266A';
+    npLast = null;
+    npPageKey = '';
   }
 
   /** Drop a now-playing overlay card (chat hero) back to its rail chip. */
@@ -499,6 +603,7 @@
       applyRailNp(payload);
       if (uiState === 'idle') {
         if (cardShowing && cardType === 'now_playing') collapseNpOverlay();
+        absorbIdleNp(payload);
         return;
       }
     }
@@ -567,6 +672,60 @@
     hideRailNp();
   }
 
+  // ---------------------------------------------------- ambient cycle
+  // Owner round-1: the resting home may, once it has sat untouched for a
+  // while, briefly show a full ambient page (weather / world clock) and then
+  // come home again. Home stays primary -- this never runs during a
+  // conversation, while a card or panel is up, or while music is on the
+  // display, and any engagement (a tap, a voice session, music arriving)
+  // cancels it instantly and returns home.
+  var AMBIENT_AFTER_MS = 6 * 60 * 1000;   // idle this long before a rotation
+  var AMBIENT_HOLD_MS = 18 * 1000;        // ...show one page for this long
+  var AMBIENT_PAGES = ['weather', 'world'];
+  var idleSince = Date.now();
+  var endOfConvoAt = -1e12;   // when the last conversation ended (for the
+                              // music-page landing, see applyFocus)
+  var ambientPage = null;
+  var ambientOpenedAt = 0;
+  var ambientPick = 0;
+  var stopwatchRunning = false;
+
+  /** Any engagement resets the idle clock and aborts an ambient page. */
+  function touchIdle() {
+    idleSince = Date.now();
+    if (ambientPage) {
+      openPage('home');
+      ambientPage = null;
+    }
+  }
+
+  function ambientDue() {
+    return uiState === 'idle' && focus !== 'chat' &&
+      current === 'home' && !cardShowing &&
+      npChipEl.classList.contains('hidden') &&   // no music on the display
+      !stopwatchRunning &&                        // a live stopwatch is activity
+      Date.now() - idleSince >= AMBIENT_AFTER_MS;
+  }
+
+  /** One step of the ambient cycle, driven from the idle pump (tick). */
+  function ambientStep(nowMs) {
+    if (ambientPage) {
+      // A rotation is showing: bring it home when its time is up. (touchIdle
+      // has already aborted it early on any engagement.)
+      if (nowMs - ambientOpenedAt >= AMBIENT_HOLD_MS && current === ambientPage) {
+        openPage('home');
+        ambientPage = null;
+        idleSince = Date.now();   // a full idle stretch before the next one
+      }
+      return;
+    }
+    if (!ambientDue()) return;
+    ambientPick = (ambientPick + 1) % AMBIENT_PAGES.length;
+    ambientPage = AMBIENT_PAGES[ambientPick];
+    ambientOpenedAt = nowMs;
+    openPage(ambientPage);
+  }
+
   // ------------------------------------------------------ conversation
   var STATE_COLOR = {
     idle: 'var(--blue)', listening: '#63b3ed', thinking: '#b794f4', speaking: '#68d391'
@@ -583,16 +742,23 @@
       // The home is the resting surface: a conversation returns to it the
       // instant it ends, so park any open detail page underneath the chat
       // template now rather than revealing it later (owner home model).
+      // Ambient rotation is off the table while somebody is talking.
+      touchIdle();
       openPage('home');
+      endOfConvoAt = -1e12;
       if (!document.body.classList.contains('fx-chat')) applyFocus('chat');
       $('convo-label').textContent = STATE_LABEL[state] || '';
     } else {
       $('convo-hint').classList.add('hidden');
       // If the conversation hero was the now-playing card, fold it back into
-      // the rail chip -- music stays on the home, never as a takeover.
+      // the rail chip -- the full page, if any, is a local surface.
       if (cardType === 'now_playing' && cardShowing) collapseNpOverlay();
-      // Optimistic return to the engine; the server's layout push corrects
-      // to music when the speaker card is still up.
+      // The conversation just ended: note when, so a layout-music push that
+      // follows within a beat lands on the music page rather than a plain
+      // home. Optimistic return to the engine meanwhile; the server's
+      // layout push corrects to music when the speaker card is still up.
+      endOfConvoAt = Date.now();
+      touchIdle();
       if (document.body.classList.contains('fx-chat')) applyFocus('home');
       tick();          // the clock was parked; catch it up before it is seen
     }
@@ -616,6 +782,14 @@
   }
 
   var lastRailMin = -1;
+
+  function wxClockText(now) {
+    var h = now.getHours() % 12; if (h === 0) h = 12;
+    return DAYS_S[now.getDay()] + ', ' + MONTHS_S[now.getMonth()] + ' ' + now.getDate() +
+      ' \u00B7 ' + h + ':' + pad(now.getMinutes()) + ' ' +
+      (now.getHours() >= 12 ? 'PM' : 'AM');
+  }
+
   function tick() {
     var now = new Date();
     drawClock(now);
@@ -624,6 +798,11 @@
       lastRailMin = now.getMinutes();
       drawRailCities(now);
     }
+    // The weather page doubles as an ambient rotation screen, where the home
+    // clock is not visible: keep a slim time line on it current.
+    var wxNow = $('wx-now');
+    if (wxNow && current === 'weather') wxNow.textContent = wxClockText(now);
+    if (uiState === 'idle') ambientStep(Date.now());
   }
 
   // ----------------------------------------------------------------- taps
@@ -638,6 +817,10 @@
     NATIVE.tap();
   });
 
+  // Any tap at all is presence: reset the ambient idle clock (and abort a
+  // rotation in progress). Captured so it also covers the UI controls above.
+  document.addEventListener('click', function () { touchIdle(); }, true);
+
   // Rail tiles with data-open navigate to their full page locally (no server
   // round trip, no session); the chips below open the native schedule pages.
   document.addEventListener('click', function (e) {
@@ -649,21 +832,25 @@
   $('timer-chip').addEventListener('click', function () { NATIVE.openTimer(); });
   $('stopwatch-chip').addEventListener('click', function () { NATIVE.openStopwatch(); });
 
-  // The now-playing transport row (chat-hero card only). Its buttons carry
-  // data-ui, so the handler above has already declined to treat the press as
-  // a tap-to-talk -- pressing pause must not also open a conversation.
-  cardBody.addEventListener('click', function (e) {
+  // The now-playing transport row -- on the chat-hero card AND the music
+  // page (owner round-1). Buttons carry data-ui, so the tap handler above has
+  // already declined to treat the press as tap-to-talk -- pressing pause must
+  // not also open a conversation.
+  document.addEventListener('click', function (e) {
     var button = e.target.closest('[data-media]');
     if (button) { NATIVE.media(button.getAttribute('data-media')); return; }
     // Options-panel row (UI-BRIEF-16): tap sends `select {index}`, never a
     // tap/button. One answer per question: the tapped row is highlighted and
-    // every row locks until the server replaces or clears the panel.
-    var row = e.target.closest('[data-select]');
-    if (row && !row.disabled) {
-      var rows = cardBody.querySelectorAll('[data-select]');
-      for (var i = 0; i < rows.length; i++) rows[i].disabled = true;
-      row.classList.add('chosen');
-      NATIVE.select(parseInt(row.getAttribute('data-select'), 10));
+    // every row locks until the server replaces or clears the panel. Rows
+    // only exist inside the chat-hero card body.
+    if (cardBody.contains(e.target)) {
+      var row = e.target.closest('[data-select]');
+      if (row && !row.disabled) {
+        var rows = cardBody.querySelectorAll('[data-select]');
+        for (var i = 0; i < rows.length; i++) rows[i].disabled = true;
+        row.classList.add('chosen');
+        NATIVE.select(parseInt(row.getAttribute('data-select'), 10));
+      }
     }
   });
 
@@ -696,34 +883,44 @@
     schedule: function (alarms, timers) {
       $('alarm-chip').innerHTML = 'Alarms &middot; ' + alarms;
       $('timer-chip').innerHTML = 'Timers &middot; ' + timers;
+      touchIdle();
     },
 
     /** Stopwatch mirror for the suite chip (v1.6). */
     stopwatch: function (running, text) {
-      $('stopwatch-chip').innerHTML = running ? 'Stopwatch &middot; ' + text : 'Stopwatch';
+      stopwatchRunning = !!running;
+      $('stopwatch-chip').innerHTML =
+        stopwatchRunning ? 'Stopwatch &middot; ' + text : 'Stopwatch';
+      // The running dot + ambient gating both key off this class/flag.
+      $('stopwatch-chip').classList.toggle('running', stopwatchRunning);
+      touchIdle();
     },
 
     /**
      * Layout focus (protocol v1.6, UI-BRIEF-14): home | music | chat.
-     * home/music render the 65/35 engine; chat renders the conversation
-     * template. Unknown foci fall back to home.
+     * chat renders the conversation template. music on an idle home that
+     * just finished a conversation opens the full music page; otherwise
+     * music = the now-playing chip on the home (owner round-1). Unknown
+     * foci fall back to home.
      */
     layout: function (raw) { applyFocus(raw); },
 
     /** Privacy mute state (HARDWARE-BRIEF-7 v2): show the rail chip. */
     mute: function (on) {
       $('mute-chip').classList.toggle('hidden', !on);
+      touchIdle();
     },
 
     display: function (type, payloadJson, durationMs, priority) {
       try {
         showCard(type, JSON.parse(payloadJson), durationMs || 0, priority || 0);
+        touchIdle();
       } catch (e) {
         NATIVE.log('could not render ' + type + ' card: ' + e);
       }
     },
 
-    displayClear: function () { hideCard(); },
+    displayClear: function () { hideCard(); touchIdle(); },
 
     /**
      * Rows for the pages that have no source yet (BRIEF-10). Until one
@@ -828,6 +1025,15 @@
     window.World.init($('world-map'));
   } catch (e) {
     NATIVE.log('world map init failed: ' + e);
+  }
+  // Static transport icons for the music page (the chat-hero card builds its
+  // own icons on every render).
+  var musicPageEl = document.querySelector('.music-page');
+  if (musicPageEl) {
+    var pagePrev = musicPageEl.querySelector('[data-media="previous"]');
+    var pageNext = musicPageEl.querySelector('[data-media="next"]');
+    if (pagePrev) pagePrev.innerHTML = icon('previous');
+    if (pageNext) pageNext.innerHTML = icon('next');
   }
   applyFocus('home');   // body already starts fx-home; keeps the invariant
   openPage('home');

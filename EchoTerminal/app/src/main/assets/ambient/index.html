@@ -73,12 +73,15 @@
       </div>
 
       <!-- Now playing as a compact rail chip (home model: music never
-           displaces the home). Shown only while the display's speaker is
-           active; hidden by display_clear. -->
-      <div id="np-chip" class="chip np-chip hidden">
+           displaces the home). Tapping it opens the full music page. Shown
+           only while the display's speaker is active; hidden by
+           display_clear. -->
+      <button id="np-chip" class="chip np-chip hidden" data-ui data-open="music"
+              aria-label="Now playing — open music">
         <span class="np-eq" aria-hidden="true"></span>
         <span class="np-text" id="np-chip-text">&#9835;</span>
-      </div>
+        <span class="np-go" aria-hidden="true">&#8250;</span>
+      </button>
 
       <!-- Privacy mute is device-owned (HARDWARE-BRIEF-7 v2); this chip is
            a status readout only, and is hidden while unmuted. -->
@@ -103,6 +106,9 @@
         <div class="wx-temp-big" id="wx-temp">--&deg;</div>
         <div class="wx-sub" id="wx-sub">No weather yet</div>
         <div class="wx-hilo placeholder"><span>H <b>--</b></span><span>L <b>--</b></span><span>Wind <b>--</b></span></div>
+        <!-- Ambient rotation shows this page without the home clock, so the
+             time rides along in a slim line of its own. -->
+        <div class="wx-now" id="wx-now"></div>
       </div>
       <div class="wx-glyph" id="wx-glyph"></div>
     </div>
@@ -126,6 +132,30 @@
       </div>
     </div>
     <div class="city-list" id="city-list"></div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- MUSIC -->
+<!-- The full music page (owner round-1): reached by tapping the rail's
+     now-playing chip, and the landing surface when a conversation ends
+     while the speaker card is up (layout focus = music). Reuses the
+     now-playing card language: art, title/artist/album, live progress and
+     the transport row, which fire the same media_control messages. -->
+<section class="page" data-page="music">
+  <div class="music-page">
+    <div class="m-art" id="m-art" aria-hidden="true"></div>
+    <div class="m-meta">
+      <div class="np-title" id="m-title">Nothing playing</div>
+      <div class="np-artist" id="m-artist"></div>
+      <div class="np-album" id="m-album"></div>
+      <div class="card-bar"><i id="m-bar"></i></div>
+      <div class="np-times"><span id="m-pos">0:00</span><span id="m-dur">0:00</span></div>
+      <div class="np-row">
+        <button class="np-btn" data-ui data-media="previous" aria-label="Previous track"></button>
+        <button class="np-btn np-main" data-ui data-media="toggle" id="m-toggle" aria-label="Play or pause"></button>
+        <button class="np-btn" data-ui data-media="next" aria-label="Next track"></button>
+      </div>
+    </div>
   </div>
 </section>
 

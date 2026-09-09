@@ -1,72 +1,68 @@
-# UI-BRIEF-15 — Music focus: now-playing hero layout (auto-reorganize for music)
+# UI-BRIEF-15 — Music page (owner round-1: supersedes the "music-focus takeover")
 
 Repo: echo-gemini. Read `docs/HANDOFF.md`, `docs/SPOTIFY.md`,
-`docs/SPOTIFY-BRIEF-12.md` (librespot player, v1.5 client protocol:
-`media_control` messages, `now_playing` display card) and
-`docs/UI-BRIEF-14-LAYOUT-ENGINE.md` (the focus engine this fills in) first.
+`docs/UI-BRIEF-14-LAYOUT-ENGINE.md` and **`docs/HOME-MODEL-OWNER-SPEC.md`**
+(the owner home model that governs this) first.
 
-**Prerequisites:**
-1. Spotify brief-12 **finish + end-to-end verified** (audio on the Show);
-2. UI-BRIEF-14 landed (focus templates + transitions exist).
+**Status (2026-09-08 round-1):** the original brief proposed a full-screen
+music *hero that displaces the home* whenever music is active. The owner home
+model shelved that: the home is the resting surface and the clock is always
+visible during idle, so music lives as a compact rail chip. Round-1 adds a
+full music **page** that lives *on top of* the home like the other detail
+pages (weather / world clock), with two entry paths:
 
-## Goal
+1. **Chip → page (user-driven).** The rail's now-playing chip is a button.
+   Tapping it opens the full music page.
+2. **Chat-end landing (server-driven).** When a conversation ends while the
+   display's speaker card is still up, the server's `layout {focus: music}`
+   push arrives right after `state {state: idle}`; the WebView opens the
+   music page within that beat (3 s window) instead of leaving a plain home.
+   Phone-side track starts still keep the chip only — music does not displace
+   the resting home on its own.
 
-When music is playing or paused, the display auto-reorganizes: **music becomes the
-hero** (big now-playing panel with controls), **the clock shrinks to a compact
-corner** — the exact "music is the main thing, time smaller" behavior the owner asked
-for. When playback stops or clears, it returns home.
+The page closes back to the home (`page-back`), and is parked like every
+other page when a conversation opens.
 
-## Behavior
+## The music page
 
-1. **focus = music** when the player is playing OR paused (a paused track is still the
-   current surface — don't bounce to home mid-song). Stop/clear → back to home focus
-   (or chat if a session is somehow active).
-2. **Music template:** hero panel with:
-   - album art (lazy-loaded, bounded: fail to a monogram/title tile on timeout; don't
-     blow the 1 GB budget — decode once, cap resolution),
-   - title + artist (now_playing payload), live progress bar + times,
-   - media row: prev / toggle / next — these fire the **existing v1.5 `media_control`**
-     messages (toggle/pause/resume/next/previous). Taps on controls are MEDIA taps,
-     never talk.
-   - clock compacts to the corner block from UI-BRIEF-14; widget rail hidden or slim
-     (design choice: keep weather mini or nothing — pick one, keep it consistent).
-3. **Voice arbitration** (existing rule: conversation pauses music): a session
-   starting flips focus to `chat` (and the player pauses); when the session ends and
-   playback resumes → focus back to `music`; if the user stopped the music meanwhile →
-   `home`. Server owns this state machine.
-4. Layout engine integration: UI-BRIEF-14's `music` template stub gets filled here;
-   focus transitions reuse the same ≤ 400 ms opacity/transform rules.
+Full-page now-playing surface, same visual language as the chat-hero card:
 
-## Server work
+- album art (server-proxied `art_url`, bounded; placeholder monogram on
+  none), title / artist / album, live progress bar + times,
+- transport row: prev / toggle / next → the existing v1.5 `media_control`
+  messages. Buttons carry `data-ui`, so a press never fires tap-to-talk.
+- Progress creeps once per second locally between now_playing pushes and is
+  corrected by each push (paused pushes stop the ticker).
 
-- Extend focus computation with player state events (play/pause/stop/track change —
-  wherever the poller/supervisor in `server/spotify.py` lands state) so `layout
-  {focus: music}` pushes at the right moments. Unit-test the arbitration:
-  playing→chat flip, resume→music return, stop→home, pause-stays-music.
-- Confirm now-playing pushes are coherent with the media row (no double sources of
-  truth between the now_playing card and the layout hero — the hero IS the surface now;
-  suppress the old full-bleed now_playing card overlay while focus=music so the two
-  don't stack).
+## Where it lives
 
-## Client work
+- `EchoTerminal/.../assets/ambient/index.html` — `<section data-page="music">`
+  + the np chip is now a `<button data-open="music">`.
+- `.../app.js` — `drawMusicPage()`, `absorbIdleNp()`, the
+  `kickNpTick()/npTickOnce()` ticker family (owns its own timer so it never
+  collides with card countdowns), `openPage('music')` hooks, and the
+  chat-end landing in `applyFocus()` (gated by `endOfConvoAt`).
+- `.../styles.css` — `.music-page` / `.m-art` / `.m-meta` layout.
 
-- WebView: music template in the layout engine (art, title/artist, progress, media
-  row wired to the existing MediaControl bridge path), compact-clock variant,
-  clean-up on clear/stop pushes (progress timer stops when paused/cleared — no
-  zombie intervals on a 1 GB device).
+## Arbitration (unchanged, server)
 
-## Scope rules
+`chat` while a session runs > `music` while the speaker card is up > `home`
+otherwise (server `_current_focus`, UI-BRIEF-14). A session pauses music
+(hold); when it ends and playback resumes the focus flips back to music, so
+the landing above triggers exactly when the user asked for music in chat.
 
-- No new protocol message types beyond what UI-BRIEF-14 + v1.5 already define; if the
-  client needs a "player state changed" push that doesn't exist yet, add it minimally
-  and say so. No Compose. Don't touch librespot internals beyond reading state.
-- One worker per repo; commit in slices (server focus rules + tests, client template).
+## Verification (2026-09-08, browser-level)
 
-## Deliverable + verification
+- idle push → chip only; `layout {focus: music}` with no conversation does
+  NOT open the page (home model preserved);
+- conversation + now_playing hero → idle → `layout music` lands the page and
+  progress ticks 1 s; transport buttons emit `media:…` and never `tap`;
+- chip tap opens the page; paused push stops the ticker; page-back returns
+  home; music page fits the 960x480 panel without overflow.
 
-- `pytest server/ -q` green; `./gradlew assembleDebug` green (JAVA_HOME Adoptium 17).
-- On-device: "play some lofi" → focus=music hero with art + controls, clock compact;
-  pause via screen tap → stays music; next via screen tap → track updates; "hey
-  jarvis …" → chat focus + music pauses; end session → music resumes, focus music;
-  "stop the music" → focus home. Watch frame drops on art decode.
-- Report ~15 lines + commit SHAs.
+## On-device
+
+"play some lofi" (music starts, chip appears) → say "stop" mid-song → page
+lands; tap the chip from the resting home → page opens, pause/skip work;
+tap ‹ Home → resting home with the chip. Watch art decode once on the 1 GB
+device (the page art is the same bounded server-proxied URL as the card).
