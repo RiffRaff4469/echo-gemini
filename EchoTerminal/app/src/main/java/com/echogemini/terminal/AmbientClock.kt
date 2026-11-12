@@ -26,7 +26,7 @@ import kotlin.math.roundToInt
  * The base layer: a locally-rendered ambient home screen with **zero network
  * dependency**.
  *
- * This is the explicit product requirement (design notes): if the
+ * This is the explicit product requirement (the design notes): if the
  * Windows PC is off, unplugged, or has never existed, the Show is still a
  * clock. Nothing in this class touches [Link], reads a socket, or waits on
  * anything. It draws the system time on a handler tick and that is all. The
@@ -137,7 +137,7 @@ class AmbientClock(context: Context) : View(context) {
     private var glowRadius = 0f
 
     /**
-     * Night dimming. design notes: the panel is LCD so burn-in is not a
+     * Night dimming. the design notes: the panel is LCD so burn-in is not a
      * concern, but a clock that blazes at 3 a.m. is its own problem. Driven by
      * the light sensor in [MainActivity], with a clock-hour fallback so it
      * still dims on a unit whose sensor misbehaves.
@@ -160,7 +160,8 @@ class AmbientClock(context: Context) : View(context) {
     /**
      * The latest observation the server pushed, or null if it never has.
      *
-     * Null is a normal, long-lived state -- the PC being off is normal (design notes* 8.1) -- so the card renders a placeholder rather than disappearing. A
+     * Null is a normal, long-lived state -- the PC being off is normal (the design notes
+     * 8.1) -- so the card renders a placeholder rather than disappearing. A
      * card that comes and goes would make the layout jump every time the link
      * flaps.
      */

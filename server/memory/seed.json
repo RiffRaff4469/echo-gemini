@@ -1,7 +1,7 @@
 {
   "facts": [
     {
-      "text": "Jarvis is the personal assistant to the owner and the other resident in their dorm room.",
+      "text": "Jarvis is the household voice assistant running on the living-room display.",
       "added": "2026-09-07",
       "source": "seed"
     },
@@ -11,7 +11,7 @@
       "source": "seed"
     },
     {
-      "text": "the owner's Govee LED strips: the H617A is called 'desk lights' and the H617C is called 'bed lights'; saying 'the lights' means both.",
+      "text": "The Govee LED strips: the H617A is called the desk lights and the H617C is called the bed lights; saying the lights means both.",
       "added": "2026-09-07",
       "source": "seed"
     }

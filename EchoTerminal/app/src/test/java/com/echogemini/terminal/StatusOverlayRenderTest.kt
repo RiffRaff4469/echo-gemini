@@ -21,7 +21,7 @@ import org.robolectric.annotation.GraphicsMode
  * Same reasoning as [AmbientClockRenderTest]: this band is drawn by hand onto a
  * [Canvas], so nothing about where the marks land is checked by the compiler.
  * The specific worry for the post-answer hint is collision -- it is new text on
- * a band that already carries the camera indicator, and design notes
+ * a band that already carries the camera indicator, and the design notes
  * makes "the camera is visibly on" a product requirement, not a nicety.
  */
 @RunWith(RobolectricTestRunner::class)

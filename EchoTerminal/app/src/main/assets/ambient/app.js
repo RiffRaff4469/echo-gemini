@@ -1,7 +1,7 @@
 /*
  * The ambient UI's only script. Everything the panel shows lives here.
  *
- * design notes (layout engine + owner home model, 2026-09-08): one
+ * layout engine (layout engine + owner home model, 2026-09-08): one
  * focus-driven layout. `layout {focus: home|music|chat}` messages from the
  * server pick the template; the home engine (clock hero 65% + widget rail
  * 35%) is the resting surface and the clock NEVER rotates away. Detail pages
@@ -333,7 +333,7 @@
   }
 
   // ------------------------------------------- interactive panels (v1.6)
-  // design notes: OPTIONS renders big tappable choice rows; LIST renders a
+  // visual answers: OPTIONS renders big tappable choice rows; LIST renders a
   // read-only enumeration. Both are TRUSTED DOM rendered by this page from a
   // typed payload -- never server HTML, same trust class as text/timer cards.
   // Rows are >=54 px (well over the 48 px floor), mark themselves data-ui so
@@ -839,7 +839,7 @@
   document.addEventListener('click', function (e) {
     var button = e.target.closest('[data-media]');
     if (button) { NATIVE.media(button.getAttribute('data-media')); return; }
-    // Options-panel row (design notes): tap sends `select {index}`, never a
+    // Options-panel row (visual answers): tap sends `select {index}`, never a
     // tap/button. One answer per question: the tapped row is highlighted and
     // every row locks until the server replaces or clears the panel. Rows
     // only exist inside the chat-hero card body.
@@ -897,7 +897,7 @@
     },
 
     /**
-     * Layout focus (protocol v1.6, design notes): home | music | chat.
+     * Layout focus (protocol v1.6, layout engine): home | music | chat.
      * chat renders the conversation template. music on an idle home that
      * just finished a conversation opens the full music page; otherwise
      * music = the now-playing chip on the home (owner round-1). Unknown
@@ -905,7 +905,7 @@
      */
     layout: function (raw) { applyFocus(raw); },
 
-    /** Privacy mute state (design notes v2): show the rail chip. */
+    /** Privacy mute state (hardware notes v2): show the rail chip. */
     mute: function (on) {
       $('mute-chip').classList.toggle('hidden', !on);
       touchIdle();

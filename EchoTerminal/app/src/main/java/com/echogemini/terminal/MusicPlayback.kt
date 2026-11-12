@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
  * object -- which is the point. [AudioPlayback] exists to carry *the assistant's
  * voice*, and everything it does follows from that: it reports speaking state,
  * which closes the microphone uplink so the model does not hear itself
- * (half-duplex, design notes), and barge-in flushes it so an abandoned answer
+ * (half-duplex, the design notes 8.2), and barge-in flushes it so an abandoned answer
  * stops immediately.
  *
  * Every one of those behaviours is wrong for music. Reporting speaking would

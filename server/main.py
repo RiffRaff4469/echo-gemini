@@ -1,6 +1,7 @@
 ﻿"""echo-server: WebSocket hub + HTTP display API, one asyncio process.
 
-The device dials out and holds exactly ONE persistent WebSocket (design notes). Everything is multiplexed over it: mic audio up, camera frames up,
+The device dials out and holds exactly ONE persistent WebSocket (the design notes
+section 3). Everything is multiplexed over it: mic audio up, camera frames up,
 model audio down, display commands down. No inbound ports on the device, no NAT
 problems, and reconnection logic lives in exactly one place -- the client.
 
@@ -193,7 +194,7 @@ class Hub:
         self.cfg = cfg
         self.link: DeviceLink | None = None
         self.started_at = time.time()
-        # Layout focus (design notes): chat while a session runs, music while
+        # Layout focus (layout engine): chat while a session runs, music while
         # the display's speaker has a now-playing card, else home.
         self._last_focus: P.LayoutFocus | None = None
         self._music_card = False
@@ -206,7 +207,7 @@ class Hub:
         self._last_focus: P.LayoutFocus | None = None
         self._music_card = False
 
-        # On-screen interactive panel (design notes). Only ``options`` panels
+        # On-screen interactive panel (visual answers). Only ``options`` panels
         # are tappable; ``list`` panels are read-only. Cleared when: a newer
         # panel replaces it, display_clear arrives, a ``select`` is accepted,
         # or the session that pushed it ends (state -> idle -- see set_state).
@@ -257,7 +258,7 @@ class Hub:
             self._recorder = _AudioRecorder(Path(cfg.record_audio_dir))
 
     async def remember(self, fact: str) -> dict[str, Any]:
-        """Store a durable fact from the model (design notes)."""
+        """Store a durable fact from the model (memory notes)."""
         confirmation = self.memory.add_fact(fact, source="session")
         return {"confirmation": confirmation, "stored": fact}
 
@@ -348,10 +349,10 @@ class Hub:
         # tell the device to put the card away.
         if state is UiState.IDLE and self._panel is not None:
             self.clear_display()
-        # A session starting or ending changes the layout focus (design notes).
+        # A session starting or ending changes the layout focus (layout engine).
         self._maybe_push_layout()
 
-    # --- layout focus (design notes) -----------------------------------------
+    # --- layout focus (layout engine) -----------------------------------------
 
     def _on_music_card(self, active: bool) -> None:
         """The display's speaker card appeared or cleared -> re-evaluate."""
@@ -421,7 +422,7 @@ class Hub:
         elif isinstance(msg, P.Ping):
             link.send_msg(P.Pong(nonce=msg.nonce))
         elif isinstance(msg, P.Tap):
-            # v1.6 (design notes v2): screen taps no longer start or stop
+            # v1.6 (hardware notes v2): screen taps no longer start or stop
             # conversations -- the screen is for UI only. The wake word and the
             # physical mic button are the session triggers now. The message
             # stays decode-compatible for old clients but is a no-op.
@@ -435,7 +436,7 @@ class Hub:
         elif isinstance(msg, P.Button):
             await self._on_button(msg)
         elif isinstance(msg, P.Select):
-            # v1.6 (design notes): a tap on an options-panel row.
+            # v1.6 (visual answers): a tap on an options-panel row.
             await self._on_select(msg)
         elif isinstance(msg, P.MediaControl):
             await self._on_media_control(link, msg)
@@ -511,7 +512,7 @@ class Hub:
         # boots muted announces it in caps so the server mirror starts right.
         self.muted = bool(msg.capabilities.get("muted", False))
 
-        # Greet a fresh device with the current layout focus (design notes).
+        # Greet a fresh device with the current layout focus (layout engine).
         self._last_focus = None
         self._maybe_push_layout()
 
@@ -547,7 +548,7 @@ class Hub:
     async def _on_tap(self, msg: P.Tap) -> None:
         if not msg.pressed:
             return
-        # Retired in v1.6 (design notes v2): screen taps are UI-only.
+        # Retired in v1.6 (hardware notes v2): screen taps are UI-only.
         log.info("tap ignored: screen taps are UI-only since v1.6")
 
     async def _on_button(self, msg: P.Button) -> None:
@@ -572,7 +573,7 @@ class Hub:
         await self.set_state(UiState.LISTENING)
         await self.session.start("button")
 
-    # --- visual panels (design notes) ---------------------------------------
+    # --- visual panels (visual answers) ---------------------------------------
 
     @property
     def panel(self) -> dict[str, Any] | None:
@@ -704,7 +705,7 @@ class Hub:
         return {"ok": True, "note": "The screen is clear."}
 
     async def _on_select(self, msg: P.Select) -> None:
-        """A tap on an options-panel row (device -> server, design notes).
+        """A tap on an options-panel row (device -> server, visual answers).
 
         Maps the 0-based index back to the stored label, then hands the model
         the label itself: mid-session it is queued and delivered when the
@@ -1037,7 +1038,7 @@ HUB_KEY: web.AppKey[Hub] = web.AppKey("hub", Hub)
 class _AudioRecorder:
     """Appends raw mic PCM to disk so the wake word can be retuned offline.
 
-    design notes: iterating on logged audio is the whole reason wake word
+    the design notes section 7: iterating on logged audio is the whole reason wake word
     lives on the server. Raw headerless PCM16 @16 kHz -- import with
     ``ffmpeg -f s16le -ar 16000 -ac 1 -i <file> out.wav``.
     """

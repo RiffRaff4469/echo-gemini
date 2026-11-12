@@ -18,7 +18,7 @@ import java.util.Locale
  * content, then fades back to the clock on expiry or link loss.
  *
  * A WebView is the right choice for the push surface specifically because it
- * makes "anything via API" true (design notes) -- weather, calendar,
+ * makes "anything via API" true (the design notes) -- weather, calendar,
  * photos, transit, dashboards -- without shipping a new APK per card type. All
  * four display types are rendered as HTML here; `text` and `timer` get a
  * template so the common cases do not require the caller to write markup.
@@ -137,7 +137,7 @@ class PushSurface(context: Context) : FrameLayout(context) {
         Protocol.DisplayType.NOW_PLAYING -> nowPlayingTemplate(cmd.payload)
         // Canvas fallback (no WebView): options/list degrade to a plain,
         // non-interactive text card. The WebView path renders them as real
-        // touch panels; this is the emergency-only floor (design notes).
+        // touch panels; this is the emergency-only floor (visual answers).
         Protocol.DisplayType.OPTIONS -> panelTemplate(
             cmd.payload.optString("question").ifEmpty { cmd.payload.optString("title") },
             optionLabels(cmd.payload)

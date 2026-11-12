@@ -1,6 +1,6 @@
 """Wire protocol shared by echo-server and EchoTerminal.apk.
 
-ONE outbound WebSocket carries every channel (design notes). Two frame
+ONE outbound WebSocket carries every channel (the design notes section 3). Two frame
 kinds ride it:
 
   * **Text frames** are JSON control messages wrapped in a versioned envelope:
@@ -39,8 +39,8 @@ PROTOCOL_VERSION = 1
 # ``now_playing`` display card; v1.2 adds ``weather``, pushed for the ambient
 # home screen; v1.3 adds the post-answer quiet window (``session_quiet`` down,
 # ``stay`` up); v1.4 replaces ``stay`` with ``stop`` -- a tap during a session
-# now ENDS it rather than extending it (design notes); v1.5 adds music --
-# ``Channel.AUDIO_MUSIC`` down and ``media_control`` up (design notes). A
+# now ENDS it rather than extending it (fix notes); v1.5 adds music --
+# ``Channel.AUDIO_MUSIC`` down and ``media_control`` up (spotify notes). A
 # v1.0 peer stays compatible: it simply never sends or understands the new
 # types, and both sides ignore what they do not recognise. ``hello`` and
 # ``welcome`` announce it so each end can log the skew.
@@ -48,7 +48,7 @@ PROTOCOL_MINOR = 6
 
 # --- media formats ----------------------------------------------------------
 # Gemini Live: audio in is PCM16 16 kHz mono LE, audio out is 24 kHz
-# (design notes). The device produces and consumes exactly these, so the
+# (the design notes). The device produces and consumes exactly these, so the
 # server passes both through without resampling.
 AUDIO_UP_RATE = 16_000
 AUDIO_DOWN_RATE = 24_000
@@ -58,7 +58,7 @@ AUDIO_FRAME_MS = 20
 AUDIO_UP_FRAME_SAMPLES = AUDIO_UP_RATE * AUDIO_FRAME_MS // 1000  # 320
 AUDIO_UP_FRAME_BYTES = AUDIO_UP_FRAME_SAMPLES * AUDIO_SAMPLE_WIDTH  # 640
 
-# Video in: JPEG, max 1 FPS, 768x768 recommended (design notes).
+# Video in: JPEG, max 1 FPS, 768x768 recommended (the design notes).
 VIDEO_MAX_FPS = 1.0
 VIDEO_EDGE = 768
 VIDEO_MIME = "image/jpeg"
@@ -84,7 +84,7 @@ class Channel(IntEnum):
 # Why music does not simply reuse ``AUDIO_DOWN``, which carries the same format
 # to the same speaker: on the device, ``AUDIO_DOWN`` feeds ``AudioPlayback``,
 # and ``AudioPlayback`` means *the assistant is talking*. It reports speaking
-# state, which closes the microphone uplink (half-duplex, design notes), and
+# state, which closes the microphone uplink (half-duplex, the design notes 8.2), and
 # barge-in flushes it. Music on that channel would therefore hold the mic shut
 # for as long as it played -- no wake word, so no way to say "pause" -- and the
 # first thing the model said would silence the album.
@@ -112,7 +112,7 @@ class MsgType(str, Enum):
     ALARM_FIRED = "alarm_fired"  # v1.1
     STOPWATCH_STATE = "stopwatch_state"  # v1.6, device -> server
     MEDIA_CONTROL = "media_control"  # v1.5
-    SELECT = "select"  # v1.6: tap on an options-panel row (design notes)
+    SELECT = "select"  # v1.6: tap on an options-panel row (visual answers)
 
     # server -> device
     WELCOME = "welcome"
@@ -127,11 +127,11 @@ class MsgType(str, Enum):
     WEATHER = "weather"  # v1.2
     SESSION_QUIET = "session_quiet"  # v1.3
     MUTE = "mute"  # v1.6: voice-initiated mute (server -> device)
-    LAYOUT = "layout"  # v1.6: focus-driven layout engine (design notes)
+    LAYOUT = "layout"  # v1.6: focus-driven layout engine (layout engine)
 
 
 class UiState(str, Enum):
-    """Server-driven device UI state (design notes)."""
+    """Server-driven device UI state (the design notes section 8.2)."""
 
     IDLE = "idle"
     LISTENING = "listening"
@@ -140,7 +140,7 @@ class UiState(str, Enum):
 
 
 class LayoutFocus(str, Enum):
-    """Which layout template the home screen should show (design notes)."""
+    """Which layout template the home screen should show (layout engine)."""
 
     HOME = "home"
     MUSIC = "music"
@@ -158,21 +158,21 @@ class CameraStatus(str, Enum):
 
 
 class DisplayType(str, Enum):
-    """``POST /display`` content types (design notes)."""
+    """``POST /display`` content types (the design notes section 8.1)."""
 
     TEXT = "text"
     HTML = "html"
     IMAGE = "image"
     TIMER = "timer"
     NOW_PLAYING = "now_playing"  # v1.1 -- rendered like any other card
-    # v1.6 -- interactive panels (design notes). Rendered as TRUSTED DOM by the
+    # v1.6 -- interactive panels (visual answers). Rendered as TRUSTED DOM by the
     # device's own renderer (same trust class as the other cards), never as
     # server HTML. OPTIONS rows are tappable and come back as `select`.
     OPTIONS = "options"
     LIST = "list"
 
 
-# Panel payload bounds (design notes). OPTIONS rows must fit the 960x480 touch
+# Panel payload bounds (visual answers). OPTIONS rows must fit the 960x480 touch
 # surface with >= 48 px tap targets, so the count is hard-capped and labels are
 # clipped at the server. LIST is an enumerated read-only panel (steps, recipes,
 # schedules) with a looser cap.
@@ -207,8 +207,8 @@ class AlarmOp(str, Enum):
 
     Every op is applied on-device. The server is a convenience, never a
     dependency: alarms and timers keep working with the PC switched off, which
-    is the whole point of scheduling them locally (design notes section 1).
-    The stopwatch ops (v1.6, design notes) ride the same channel: the
+    is the whole point of scheduling them locally (build notes).
+    The stopwatch ops (v1.6, clock notes) ride the same channel: the
     device owns the running clock, the server only relays voice intents.
     """
 
@@ -304,7 +304,7 @@ MAX_HTML_BYTES = 512 * 1024
 
 @dataclass
 class DisplayCommand:
-    """``{type, payload, duration, priority}`` -- design notes
+    """``{type, payload, duration, priority}`` -- the design notes section 8.1.
 
     ``duration`` is seconds on screen; ``0`` means "until replaced or cleared".
     Higher ``priority`` wins when two commands overlap.
@@ -417,7 +417,7 @@ class DisplayCommand:
             if is_playing is not None and not isinstance(is_playing, bool):
                 raise ProtocolError("payload.is_playing must be true or false")
         elif self.type is DisplayType.OPTIONS:
-            # Tappable choice rows (design notes). Count is bounded so the rows
+            # Tappable choice rows (visual answers). Count is bounded so the rows
             # keep >= 48 px touch targets on the 960x480 panel; anything longer
             # than the caps below is a caller bug, not something to render.
             _optional_str(p, "title")
@@ -458,7 +458,7 @@ class DisplayCommand:
                             f"{OPTION_SUB_MAX_CHARS} characters"
                         )
         elif self.type is DisplayType.LIST:
-            # Read-only enumerated panel (design notes): steps, recipes, lists.
+            # Read-only enumerated panel (visual answers): steps, recipes, lists.
             _optional_str(p, "title")
             raw = p.get("items")
             if not isinstance(raw, list) or not (
@@ -507,7 +507,7 @@ def _optional_number(payload: dict[str, Any], key: str) -> float | None:
 
 
 def clip_text(text: str, max_chars: int) -> str:
-    """Clip a panel string for the 960x480 screen (design notes).
+    """Clip a panel string for the 960x480 screen (visual answers).
 
     The tools that build ``options``/``list`` panels clip long labels here so
     a row always fits; the *panel state* keeps the untruncated original so a
@@ -588,7 +588,7 @@ class Pong(Message):
 @dataclass
 class Tap(Message):
     """Tap-anywhere-to-talk. A permanent manual override, not a v1 shim
-    (design notes) -- the mic is weak enough that wake word will miss."""
+    (the design notes section 1) -- the mic is weak enough that wake word will miss."""
 
     TYPE: ClassVar[MsgType] = MsgType.TAP
 
@@ -696,7 +696,7 @@ class MediaControl(Message):
 @dataclass
 class Select(Message):
     """device -> server: the user tapped option row ``index`` (0-based) of the
-    options panel currently on screen (design notes, v1.6).
+    options panel currently on screen (visual answers, v1.6).
 
     Deliberately NOT a ``tap`` or ``button`` message: since v1.6 the screen is
     UI-only and talk is owned by the mic button and the wake word. This says
@@ -794,7 +794,7 @@ class StateMsg(Message):
 class Mic(Message):
     """Uplink gate. Half-duplex: the server closes the mic while it is
     speaking rather than doing acoustic echo cancellation on one weak
-    microphone (design notes)."""
+    microphone (the design notes section 8.2)."""
 
     TYPE: ClassVar[MsgType] = MsgType.MIC
 
@@ -839,7 +839,7 @@ class DisplayClear(Message):
 @dataclass
 class Video(Message):
     """Vision control. The camera opens ONLY when this arrives with
-    ``enabled=True`` and is released on ``enabled=False`` (design notes)."""
+    ``enabled=True`` and is released on ``enabled=False`` (the design notes 8.3)."""
 
     TYPE: ClassVar[MsgType] = MsgType.VIDEO
 
@@ -1124,7 +1124,7 @@ class StopwatchStateMsg(Message):
 
 @dataclass
 class LayoutMsg(Message):
-    """server -> device: which layout template to show (design notes, v1.6).
+    """server -> device: which layout template to show (layout engine, v1.6).
 
     Carries the full focus, never a delta: ``home`` | ``music`` | ``chat``.
     The device rearranges its single DOM around the template; a missing or

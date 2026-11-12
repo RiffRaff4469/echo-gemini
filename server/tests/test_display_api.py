@@ -173,7 +173,7 @@ async def test_malformed_binary_frame_is_ignored_not_fatal(client: TestClient) -
 #
 # One gesture, two meanings, and the device picks which envelope to send from
 # what is on its own screen. What the hub does with each is pinned here because
-# design notes inverted the second one: a tap during a session used to buy
+# fix notes inverted the second one: a tap during a session used to buy
 # another half minute and now ends the conversation on the spot.
 
 
@@ -188,7 +188,7 @@ class StubSession:
         self.touches = 0
         self.quiet_seconds_left: float | None = None
         self.vision_on = False
-        # design notes: choices queued into the session (select taps).
+        # visual answers: choices queued into the session (select taps).
         self.choices: list[str] = []
 
     async def start(self, reason: str) -> bool:
@@ -230,7 +230,7 @@ async def handled(device: FakeDevice, nonce: int = 1) -> None:
 
 
 async def test_a_tap_with_nothing_running_opens_a_session(client: TestClient) -> None:
-    # v1.6 (design notes v2): screen taps are UI-only -- they no longer
+    # v1.6 (hardware notes v2): screen taps are UI-only -- they no longer
     # start or stop conversations. The wake word and the physical mic button
     # (button talk_toggle) are the triggers.
     device, session = await tap_device(client, session_active=False)
@@ -289,7 +289,7 @@ async def test_an_old_clients_stay_is_treated_as_a_stop(client: TestClient) -> N
                 "is_playing": True,
             },
         },
-        # v1.6 panels (design notes).
+        # v1.6 panels (visual answers).
         {
             "type": "options",
             "payload": {

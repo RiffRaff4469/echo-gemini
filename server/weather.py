@@ -1,6 +1,6 @@
 """Ambient weather for the device's home screen.
 
-The Show has no direct internet by design (design notes): it dials one
+The Show has no direct internet by design (the design notes section 3): it dials one
 outbound WebSocket to this server over the tailnet and gets everything through
 it. So the weather it displays has to be fetched here and pushed down, the same
 way display commands are.

@@ -1,4 +1,4 @@
-"""design notes visual-answer panels: hub panel state, show_* tools, select taps.
+"""visual answers visual-answer panels: hub panel state, show_* tools, select taps.
 
 Options/list panels are pushed as ordinary DisplayCommands; what is NEW is the
 server-side panel state that maps a device ``select {index}`` back to a label
@@ -246,7 +246,7 @@ async def test_http_display_clear_drops_the_panel(client) -> None:
     assert hub.panel is None
 
 
-# --- fake-device end-to-end (design notes deliverable) -----------------------
+# --- fake-device end-to-end (visual answers deliverable) -----------------------
 # A REAL device socket + a REAL LiveSessionManager with a fake Gemini
 # connector: question -> options on screen -> tap index -> the model receives
 # the chosen label and the conversation continues.

@@ -47,7 +47,7 @@ def test_bad_devices(value):
 
 @pytest.fixture
 def ble(monkeypatch):
-    device = SimpleNamespace(address="AA:BB:CC:11:22:33", name="Govee_H617A_0735")
+    device = SimpleNamespace(address="AA:BB:CC:11:22:33", name="Govee_H617A_2233")
     scanner = AsyncMock(return_value=device)
     client = AsyncMock()
     client.__aenter__.return_value = client
@@ -64,11 +64,11 @@ async def test_broadcast_disconnect_and_filter(ble):
     assert client.__aexit__.await_count == 2
     assert factory.call_count == 2
     client.write_gatt_char.assert_awaited_with(govee.WRITE_CHAR, govee.color(255, 0, 0))
-    # The second scan must select the other resident's address AND model name.
+    # The second scan must select the second strip's address AND model name.
     predicate = scanner.call_args.args[0]
     assert not predicate(device, SimpleNamespace(local_name=device.name))
     assert predicate(SimpleNamespace(address="AA:BB:CC:44:55:66", name=None),
-                     SimpleNamespace(local_name="Govee_H617C_7840"))
+                     SimpleNamespace(local_name="Govee_H617C_5566"))
 
 
 @pytest.mark.parametrize("target,model", [("desk lights", "H617A"), ("bed lights", "H617C"), ("h617a", "H617A")])

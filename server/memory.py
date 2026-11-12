@@ -1,4 +1,4 @@
-"""Jarvis long-term memory (design notes).
+"""Jarvis long-term memory (memory notes).
 
 A small JSON store next to the server. The device stays thin; everything here
 runs on the PC. Nothing in this module sends data anywhere -- the only path

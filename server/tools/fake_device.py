@@ -1,6 +1,6 @@
 """Pretend to be the Echo Show 5, so the server can be built without hardware.
 
-This is design notesverification step 11 -- "drive the server from a desktop script
+This is the design notes verification step 11 -- "drive the server from a desktop script
 before involving the device" -- and it is the fastest debugging loop in the
 project. It speaks the real protocol over a real socket:
 

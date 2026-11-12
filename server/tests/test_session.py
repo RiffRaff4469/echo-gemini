@@ -343,7 +343,7 @@ async def test_speaking_inside_the_window_continues_the_conversation() -> None:
 
 
 async def test_nothing_extends_the_window_once_it_is_running() -> None:
-    """design notes took the extension away: the only thing that survives a
+    """fix notes took the extension away: the only thing that survives a
     running window is speaking again, which cancels it outright rather than
     pushing the deadline. Pinned because the deadline arithmetic used to take a
     max() over a tap-driven expiry, and a leftover of that would silently keep
@@ -374,7 +374,7 @@ async def test_a_tap_ends_the_session_mid_answer() -> None:
 
 
 async def test_a_tap_close_releases_the_camera() -> None:
-    """Same teardown as every other close (design notes). The HAL1 camera must
+    """Same teardown as every other close (the design notes 8.3). The HAL1 camera must
     not be left open because the session ended by hand instead of by timer."""
     manager, session, sink = make_quiet_manager(window=5.0, vision_mode="always")
     await manager.start("wake")
@@ -639,7 +639,7 @@ async def test_camera_is_released_when_the_session_ends(running) -> None:
     assert sink.vision == [True]
 
     await manager.stop("idle")
-    # design notes: the camera is released the moment the session ends, on every
+    # the design notes 8.3: the camera is released the moment the session ends, on every
     # exit path. Leaving a HAL1 camera open is how this hardware wedges.
     assert sink.vision == [True, False]
     assert manager.vision_on is False
@@ -721,7 +721,7 @@ async def test_camera_status_without_a_session_is_a_noop() -> None:
     await manager.note_camera_status(CameraStatus.SHUTTER_CLOSED, "")  # must not raise
 
 
-# --- music (design notes) -----------------------------------------------
+# --- music (spotify notes) -----------------------------------------------
 #
 # Note that every test above this line runs against a ``RecordingSink`` with no
 # ``music`` attribute at all, which is the other half of what these check: a

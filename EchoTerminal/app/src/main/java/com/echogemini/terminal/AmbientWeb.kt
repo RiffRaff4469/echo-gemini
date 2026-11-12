@@ -16,10 +16,10 @@ import android.widget.FrameLayout
 import org.json.JSONObject
 
 /**
- * The ambient display, hosted in a WebView (design notes).
+ * The ambient display, hosted in a WebView (ambient webview).
  *
  * The UI itself is `assets/ambient/` -- plain HTML, CSS and JS ported from
- * `docs/ui-mockup/mockup.html`. Nothing about the app's plumbing moved: the
+ * `the original UI mockup`. Nothing about the app's plumbing moved: the
  * link, audio, camera, alarms and the schedule screens are all still native,
  * and this class is only a display surface plus a deliberately small bridge.
  *
@@ -46,7 +46,7 @@ import org.json.JSONObject
  * The ROM being built has the system WebView removed. Construction, load
  * errors, a dead renderer and a load that never finishes are all reported
  * through [Callbacks.onWebViewFailed], and MainActivity answers by restoring
- * the Canvas ambient from design notes. That path stays compiled in and is the
+ * the Canvas ambient from canvas ambient. That path stays compiled in and is the
  * only display on any device where this class cannot start.
  */
 @SuppressLint("SetJavaScriptEnabled")
@@ -65,8 +65,8 @@ class AmbientWeb private constructor(
         fun onTap()
         fun onOpenAlarm()
         fun onOpenTimer()
-        fun onOpenStopwatch()  // v1.6 (design notes)
-        fun onSelect(index: Int)  // v1.6 (design notes): options-panel row tap
+        fun onOpenStopwatch()  // v1.6 (clock notes)
+        fun onSelect(index: Int)  // v1.6 (visual answers): options-panel row tap
 
         /** A transport button on the now-playing card (protocol v1.5). */
         fun onMedia(action: Protocol.MediaAction)
@@ -219,7 +219,7 @@ class AmbientWeb private constructor(
     fun schedule(alarms: Int, timers: Int) = call("Echo.schedule($alarms, $timers)")
 
     /**
-     * Layout focus (v1.6, design notes): home | music | chat. The page owns
+     * Layout focus (v1.6, layout engine): home | music | chat. The page owns
      * the templates; an unknown value falls back to home here so the JS
      * surface only ever sees the three real foci.
      */

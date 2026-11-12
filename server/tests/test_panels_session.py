@@ -1,4 +1,4 @@
-"""design notes: the Live-session leg of visual panels -- selection injection.
+"""visual answers: the Live-session leg of visual panels -- selection injection.
 
 Panel push/select mapping at the hub is covered in test_panels.py. What lives
 here is the session machinery: ``choose()`` hands a selection to the model as
@@ -58,7 +58,7 @@ async def test_choose_in_an_active_session_delivers_the_text() -> None:
 
 async def test_choose_waits_until_the_model_finishes_speaking() -> None:
     """A tap WHILE the model is still talking is queued, never barged in on;
-    it is delivered the moment the current turn ends (design notes spec)."""
+    it is delivered the moment the current turn ends (visual answers spec)."""
     session = FakeLiveSession()
     manager = LiveSessionManager(
         make_config(), RecordingSink(), connector=FakeConnector(session)
@@ -146,7 +146,7 @@ async def test_clear_panel_routes_to_the_sink() -> None:
 
 
 async def test_panel_tools_missing_from_the_sink_become_errors() -> None:
-    """A sink (hub) predating design notes must degrade to a model-readable
+    """A sink (hub) predating visual answers must degrade to a model-readable
     error, not crash the session."""
     manager = LiveSessionManager(make_config(), RecordingSink())
     result = await _call(

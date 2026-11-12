@@ -9,7 +9,7 @@
   300ms tap delay (screen taps drive UI only since protocol v1.6; the wake
   word and the physical mic button start conversations).
 
-  design notes (layout engine, home model owner spec): one focus-driven
+  layout engine (layout engine, home model owner spec): one focus-driven
   layout. The resting surface is the 65/35 Nest-Hub home -- clock hero left,
   widget rail right. The clock never rotates away; only the rail's widgets
   change. Full-screen pages (weather, world clock, ...) open OVER the home
@@ -83,7 +83,7 @@
         <span class="np-go" aria-hidden="true">&#8250;</span>
       </button>
 
-      <!-- Privacy mute is device-owned (design notes v2); this chip is
+      <!-- Privacy mute is device-owned (hardware notes v2); this chip is
            a status readout only, and is hidden while unmuted. -->
       <div id="mute-chip" class="chip mute-chip hidden"><span class="mute-dot"></span>Mic muted</div>
 

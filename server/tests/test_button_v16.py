@@ -1,4 +1,4 @@
-"""v1.6 physical-button behaviour (design notes v2): the mic button is the
+"""v1.6 physical-button behaviour (hardware notes v2): the mic button is the
 manual session trigger and the mute control; screen taps are UI-only."""
 
 from __future__ import annotations

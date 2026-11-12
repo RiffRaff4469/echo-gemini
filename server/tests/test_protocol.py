@@ -73,7 +73,7 @@ def test_the_minor_version_announces_music() -> None:
 
 
 def test_button_and_mute_messages_round_trip() -> None:
-    """v1.6 (design notes v2): the device-classified mic button actions and
+    """v1.6 (hardware notes v2): the device-classified mic button actions and
     the server-initiated mute envelope survive the wire format."""
     btn = P.decode('{"v":1,"t":"button","action":"talk_toggle"}')
     assert isinstance(btn, P.Button) and btn.action == "talk_toggle"
@@ -110,7 +110,7 @@ def test_media_control_rejects_an_unknown_action() -> None:
 
 
 def test_select_wire_message_decodes() -> None:
-    """v1.6 (design notes): an options-panel row tap is its own message type."""
+    """v1.6 (visual answers): an options-panel row tap is its own message type."""
     msg = P.decode('{"v":1,"t":"select","index":2}')
     assert isinstance(msg, P.Select)
     assert msg.index == 2
@@ -265,7 +265,7 @@ def test_audio_frame_constants_match_the_live_api_spec() -> None:
                 "is_playing": True,
             },
         },
-        # v1.6 panels (design notes): options and list.
+        # v1.6 panels (visual answers): options and list.
         {
             "type": "options",
             "payload": {
@@ -311,7 +311,7 @@ def test_valid_display_commands_accepted(body: dict) -> None:
         {"type": "now_playing", "payload": {"title": "x", "progress_s": -1}},
         {"type": "now_playing", "payload": {"title": "x", "duration_s": 0}},
         {"type": "now_playing", "payload": {"title": "x", "is_playing": "yes"}},
-        # v1.6 panels (design notes): structural rejects.
+        # v1.6 panels (visual answers): structural rejects.
         {"type": "options", "payload": {"options": []}},
         {"type": "options", "payload": {"options": [{"label": "only"}]}},
         {"type": "options", "payload": {"options": [{"label": str(i)} for i in range(7)]}},

@@ -4,7 +4,7 @@ One session at a time, opened on wake or tap and closed as soon as the
 conversation is plainly over -- normally ``POST_ANSWER_SILENCE_S`` after the
 model finishes answering, with ``SESSION_IDLE_TIMEOUT`` behind it as a backstop
 (see ``_watchdog``). Closing promptly is cost control AND privacy, not polish:
-Live sessions bill for the duration they are open (design notes), and for
+Live sessions bill for the duration they are open (the design notes section 12), and for
 as long as one is open the room's microphone is streaming to the model whether
 or not anybody is talking to it.
 
@@ -14,7 +14,7 @@ Data paths, all pass-through -- no resampling anywhere:
     model audio 24 kHz PCM16 <-- LiveServerMessage.data --> device speaker
     device cam  JPEG <=1 FPS  --> send_realtime_input(video=...)
 
-The device produces exactly the rates the API wants (design notes), which
+The device produces exactly the rates the API wants (the design notes section 13), which
 is why ``AudioCapture`` is pinned to 16 kHz and ``AudioPlayback`` to 24 kHz.
 
 Written against ``google-genai`` 1.75: ``client.aio.live.connect(model=, config=)``
@@ -47,7 +47,7 @@ log = logging.getLogger("echo.live")
 
 # The model asks to see rather than us guessing. VISION_MODE=on_demand exposes
 # these two functions so the camera opens exactly when a session wants vision
-# (design notes) and is released as soon as it does not.
+# (the design notes) and is released as soon as it does not.
 LOOK_TOOL = "start_camera"
 STOP_LOOK_TOOL = "stop_camera"
 
@@ -60,7 +60,7 @@ CANCEL_ALARM_TOOL = "cancel_alarm"
 CANCEL_TIMER_TOOL = "cancel_timer"
 LIST_ALARMS_TOOL = "list_alarms"
 
-# Stopwatch (v1.6, design notes).
+# Stopwatch (v1.6, clock notes).
 START_STOPWATCH_TOOL = "start_stopwatch"
 STOP_STOPWATCH_TOOL = "stop_stopwatch"
 LAP_STOPWATCH_TOOL = "lap_stopwatch"
@@ -74,7 +74,7 @@ _ALARM_TOOLS = frozenset(
         CANCEL_ALARM_TOOL,
         CANCEL_TIMER_TOOL,
         LIST_ALARMS_TOOL,
-        # Stopwatch (v1.6, design notes): the device owns the clock;
+        # Stopwatch (v1.6, clock notes): the device owns the clock;
         # these are the voice intents.
         START_STOPWATCH_TOOL,
         STOP_STOPWATCH_TOOL,
@@ -109,7 +109,7 @@ _SPOTIFY_TOOLS = frozenset(
 
 AUDIO_IN_MIME = f"audio/pcm;rate={AUDIO_UP_RATE}"
 
-# Visual-answer panels (design notes): show_options shows tappable choice rows,
+# Visual-answer panels (visual answers): show_options shows tappable choice rows,
 # show_list shows an enumerated read-only panel, clear_panel dismisses whichever
 # is up ("never mind" / "clear the screen"). Declared always: they need nothing
 # but the screen already there.
@@ -279,7 +279,7 @@ def _alarm_declarations() -> list[Any]:
             ),
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
         ),
-        # Stopwatch (v1.6, design notes): the device owns the running
+        # Stopwatch (v1.6, clock notes): the device owns the running
         # clock -- these relay intent and confirm from the device's own state.
         _nullary_declaration(
             START_STOPWATCH_TOOL,
@@ -445,7 +445,7 @@ def _build_tools(cfg: Config) -> list[Any]:
         description=(
             "Store a durable fact the user just told you that will matter in "
             "future conversations: names, preferences, recurring things about "
-            "the owner, the other resident, or the room ('my name is...', 'I prefer...', "
+            "the people you serve or the room ('my name is...', 'I prefer...', "
             "'remember I have class on...'). Call this when the user states "
             "something about themselves or the household worth keeping. Do not "
             "store one-off requests or trivia questions."
@@ -518,7 +518,7 @@ def _build_tools(cfg: Config) -> list[Any]:
 
 
 def _panel_declarations() -> list[Any]:
-    """design notes: typed visual-answer panels (options/list/clear).
+    """visual answers: typed visual-answer panels (options/list/clear).
 
     The device renders these itself as trusted DOM; the model only supplies
     typed payloads. Always declared: the screen is always there.
@@ -617,7 +617,7 @@ def _system_instruction(cfg: Config) -> str:
             "while you are being spoken to and comes back when the "
             "conversation ends, so there is no need to pause it yourself first."
         )
-    # Long-term memory (design notes): facts the owner told us in earlier
+    # Long-term memory (memory notes): facts the owner told us in earlier
     # sessions. Imported lazily so a store failure never blocks session start.
     try:
         from memory import get_store  # noqa: PLC0415 - module-level store singleton
@@ -714,7 +714,7 @@ class LiveSessionManager:
         self._session: Any = None
         self._audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(_AUDIO_QUEUE_MAX)
         self._video_q: asyncio.Queue[bytes] = asyncio.Queue(_VIDEO_QUEUE_MAX)
-        # Panel selections (design notes) waiting to be fed to the model as text.
+        # Panel selections (visual answers) waiting to be fed to the model as text.
         # None between sessions; recreated in start().
         self._text_q: asyncio.Queue[str] | None = None
         self._vad = EnergyVad(clock=clock)
@@ -821,7 +821,7 @@ class LiveSessionManager:
         self._last_activity = self._clock()
 
     def choose(self, text: str) -> bool:
-        """Feed a panel selection to the model (design notes).
+        """Feed a panel selection to the model (visual answers).
 
         Returns False when no session is running to hand it to (the hub opens
         one first). The text rides a queue drained by ``_pump_choose`` only
@@ -857,7 +857,7 @@ class LiveSessionManager:
     def _closes_at(self) -> float:
         """When the running quiet window will end the session.
 
-        Nothing extends it any more: since design notes a tap ends the session
+        Nothing extends it any more: since fix notes a tap ends the session
         outright, and speaking again cancels the window rather than moving its
         deadline. The only way past this instant is to keep talking.
         """
@@ -969,7 +969,7 @@ class LiveSessionManager:
         """Turn the device camera on or off for this session.
 
         The camera opens only here and is released the moment the session ends
-        (design notes).
+        (the design notes section 8.3).
         """
         if enabled == self._vision_on:
             return
@@ -1022,7 +1022,7 @@ class LiveSessionManager:
             self._stop.set()
             # Release the camera unconditionally. A session that ended for ANY
             # reason -- idle, error, device drop -- must not leave the HAL1
-            # camera open (design notes).
+            # camera open (the design notes).
             try:
                 if self._vision_on:
                     self._vision_on = False
@@ -1128,7 +1128,7 @@ class LiveSessionManager:
     async def _pump_choose(self, session: Any) -> None:
         """Deliver panel selections as text once the model's turn has ended.
 
-        design notes: the user answered the options on screen with a tap. A text
+        visual answers: the user answered the options on screen with a tap. A text
         sent while the model is still mid-answer would barge it off its own
         question, so a selection that lands during speech waits here until
         ``_pump_down`` marks the turn complete; one that lands afterwards (the
@@ -1199,7 +1199,7 @@ class LiveSessionManager:
                     if not self._model_speaking:
                         self._model_speaking = True
                         # Half-duplex: close the mic while we talk rather than
-                        # doing AEC on one weak microphone (design notes).
+                        # doing AEC on one weak microphone (the design notes 8.2).
                         await self.sink.set_mic(False)
                         await self.sink.set_state(UiState.SPEAKING)
                     self._last_activity = self._clock()
@@ -1306,7 +1306,7 @@ class LiveSessionManager:
         return {"error": f"unknown function {call.name}"}
 
     def _run_panel_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """design notes panel tools: show_options / show_list / clear_panel.
+        """visual answers panel tools: show_options / show_list / clear_panel.
 
         The hub owns the panel state and the device push; these forward the
         typed call and pass back its model-ready answer. The hub returns an
@@ -1513,7 +1513,7 @@ class LiveSessionManager:
         The physical privacy shutter is the point of this: patches 0015/0016
         keep the camera enumerated with the latch engaged, so frames come back
         black rather than erroring. Telling the model in words beats silently
-        streaming black JPEGs to it (design notes).
+        streaming black JPEGs to it (the design notes section 8.3).
         """
         session = self._session
         if session is None or not self.active:
@@ -1570,7 +1570,7 @@ class LiveSessionManager:
         true the idle clock is held open and no quiet window can exist, so a
         long reply always completes. The one thing that *can* is a tap on the
         screen -- ``Hub._on_stop`` calls ``stop()`` directly, which is exactly
-        what the owner asked a mid-answer tap to do (design notes).
+        what the owner asked a mid-answer tap to do (fix notes).
         """
         idle_limit = self.cfg.session_idle_timeout_s
         max_duration = self.cfg.session_max_duration_s

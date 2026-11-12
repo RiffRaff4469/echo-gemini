@@ -1,6 +1,6 @@
 /*
  * Ambient UI for the Echo Show 5 panel (960x480), ported from
- * docs/ui-mockup/mockup.html, rebuilt for the design notes layout engine.
+ * the original UI mockup, rebuilt for the layout engine layout engine.
  * The device chrome (bezel, fabric, camera dot) is gone -- this IS the
  * screen now.
  *
@@ -466,7 +466,7 @@ button.chip:active{ background:rgba(255,255,255,0.16); }
 }
 .np-btn.np-main svg{ width:34px; height:34px; }
 
-/* --- options / list panels (design notes, protocol v1.6) --------------------
+/* --- options / list panels (visual answers, protocol v1.6) --------------------
    Trusted-DOM panels rendered by this page from typed payloads (never server
    HTML). OPTIONS rows are big touch targets that send `select {index}`; LIST
    rows are read-only. Both share the pushed-card slot. Heights are budgeted

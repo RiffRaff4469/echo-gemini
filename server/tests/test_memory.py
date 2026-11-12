@@ -1,4 +1,4 @@
-"""Tests for server/memory.py (design notes)."""
+"""Tests for server/memory.py (memory notes)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ def _store(tmp_path, seed_facts: list[str] | None = None):
 
 
 def test_first_run_seeds_from_seed_file(tmp_path):
-    store = _store(tmp_path, seed_facts=["Jarvis serves the owner and the other resident."])
-    assert any("the owner and the other resident" in f["text"] for f in store.facts)
+    store = _store(tmp_path, seed_facts=["Jarvis serves the household."])
+    assert any("the household" in f["text"] for f in store.facts)
     assert runtime_path(tmp_path).exists()
 
 
@@ -29,7 +29,7 @@ def runtime_path(tmp_path):
 
 def test_add_fact_persists(tmp_path):
     store = _store(tmp_path)
-    result = store.add_fact("the owner trains five times a week.")
+    result = store.add_fact("The owner trains five times a week.")
     assert result.startswith("Remembered")
     assert any("trains five times" in f["text"] for f in store.facts)
     # Reload from disk.
@@ -39,8 +39,8 @@ def test_add_fact_persists(tmp_path):
 
 def test_dedupe_substring(tmp_path):
     store = _store(tmp_path)
-    store.add_fact("the owner prefers light blue lights")
-    result = store.add_fact("the owner prefers light blue lights for the room")
+    store.add_fact("The owner prefers light blue lights")
+    result = store.add_fact("The owner prefers light blue lights for the room")
     assert result == "Already remembered that."
     assert len(store.facts) == 1
 
@@ -62,7 +62,7 @@ def test_cap_evicts_oldest(tmp_path):
 
 def test_forget_removes_matching(tmp_path):
     store = _store(tmp_path)
-    store.add_fact("the other resident has a quiz on Thursday.")
+    store.add_fact("The owner has a quiz on Thursday.")
     result = store.forget("quiz")
     assert "1 fact(s)" in result
     assert len(store.facts) == 0

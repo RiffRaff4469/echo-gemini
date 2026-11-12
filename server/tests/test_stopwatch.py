@@ -1,4 +1,4 @@
-"""Stopwatch (design notes, v1.6): protocol, coordinator round trip,
+"""Stopwatch (clock notes, v1.6): protocol, coordinator round trip,
 and the voice-tool wiring."""
 
 from __future__ import annotations

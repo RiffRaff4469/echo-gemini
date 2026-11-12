@@ -26,7 +26,7 @@ log = logging.getLogger("echo.config")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The Live model line has been renamed repeatedly (design notes); this is
+# The Live model line has been renamed repeatedly (the design notes); this is
 # configuration, not a constant. Check https://ai.google.dev/api/live before
 # assuming this default is still current.
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
@@ -170,7 +170,7 @@ class Config:
 
     # --- device tuning ------------------------------------------------------
     # Software gain applied on-device before uplink. The real value comes from
-    # the Phase 3 mic measurement -- see docs/HARDWARE-STATUS.md.
+    # the Phase 3 mic measurement -- see the design notes.
     mic_gain: float = 1.0
 
     # --- misc ---------------------------------------------------------------
@@ -327,10 +327,9 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> Config:
 
     if not cfg.shared_secret:
         raise ConfigError(
-            "ECHO_SHARED_SECRET is not set. The WebSocket handshake requires it "
-            "(design notes) and there is deliberately no default -- an "
-            "unauthenticated listener on the tailnet is exactly what this guards "
-            "against.\n"
+            "ECHO_SHARED_SECRET is not set. The WebSocket handshake requires "
+            "it, and there is deliberately no default -- an unauthenticated "
+            "listener on the tailnet is exactly what this guards against.\n"
             "Generate one and put it in .env (copy .env.example first):\n"
             f"    ECHO_SHARED_SECRET={secrets.token_urlsafe(32)}"
         )

@@ -16,7 +16,7 @@ import kotlin.math.min
 import kotlin.random.Random
 
 /**
- * The one persistent outbound WebSocket (design notes).
+ * The one persistent outbound WebSocket (the design notes).
  *
  * The device dials out and keeps a single socket open, multiplexing mic audio
  * up, camera frames up, model audio down and display commands down. No inbound
@@ -26,7 +26,7 @@ import kotlin.random.Random
  * **The link never blocks the clock.** Every callback here is delivered on a
  * background thread and the ambient layer is driven independently; if this
  * class throws, hangs, or never connects at all, the Show is still a clock.
- * That is the explicit product requirement (design notes) and is what
+ * That is the explicit product requirement (the design notes) and is what
  * verification step 12 tests by turning the server off.
  */
 class Link(
@@ -209,7 +209,7 @@ class Link(
     fun sendMedia(action: Protocol.MediaAction) =
         sendControl(Protocol.mediaControl(action))
 
-    /** Options-panel row tap (protocol v1.6, design notes). */
+    /** Options-panel row tap (protocol v1.6, visual answers). */
     fun sendSelect(index: Int) =
         sendControl(Protocol.select(index))
 

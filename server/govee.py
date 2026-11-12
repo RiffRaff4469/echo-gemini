@@ -1,4 +1,4 @@
-"""Connect-on-demand BLE control for Govee RGBIC strips (design notes)."""
+"""Connect-on-demand BLE control for Govee RGBIC strips (govee notes)."""
 
 from __future__ import annotations
 

@@ -36,7 +36,7 @@ object Protocol {
     // (`Channel.AUDIO_MUSIC` down, `media_control` up) for Spotify; v1.6 adds
     // the physical mic button (`button` up, `mute` down), retires screen taps
     // as session controls, and adds the focus-driven layout engine (`layout`
-    // down, design notes).
+    // down, layout engine).
     const val MINOR = 6
 
     // Gemini Live: 16 kHz in, 24 kHz out, PCM16 mono little-endian. The device
@@ -63,7 +63,7 @@ object Protocol {
          * same speaker, and deliberately NOT the same channel.
          *
          * [AudioPlayback] means *the assistant is talking*: it reports speaking
-         * state, which closes the microphone uplink (half-duplex, design notes),
+         * state, which closes the microphone uplink (half-duplex, the design notes 8.2),
          * and barge-in flushes everything queued in it. Music arriving there
          * would hold the mic shut for as long as it played -- no wake word, so
          * no way to say "pause" -- and the first thing the model said would
@@ -85,7 +85,7 @@ object Protocol {
         const val DEVICE_LOG = "device_log"
         const val ERROR = "error"
         const val MEDIA_CONTROL = "media_control"
-        const val SELECT = "select"  // v1.6, design notes (device -> server)
+        const val SELECT = "select"  // v1.6, visual answers (device -> server)
 
         const val WELCOME = "welcome"
         const val PING = "ping"
@@ -101,7 +101,7 @@ object Protocol {
         const val STOPWATCH_STATE = "stopwatch_state"  // v1.6, device -> server
         const val WEATHER = "weather"
         const val SESSION_QUIET = "session_quiet"
-        const val LAYOUT = "layout"  // v1.6, design notes (server -> device)
+        const val LAYOUT = "layout"  // v1.6, layout engine (server -> device)
     }
 
     /** Server-driven UI state. */
@@ -132,8 +132,8 @@ object Protocol {
         IMAGE("image"),
         TIMER("timer"),
         NOW_PLAYING("now_playing"),
-        OPTIONS("options"),  // v1.6, design notes: tappable choice rows
-        LIST("list");  // v1.6, design notes: read-only enumerated panel
+        OPTIONS("options"),  // v1.6, visual answers: tappable choice rows
+        LIST("list");  // v1.6, visual answers: read-only enumerated panel
 
         companion object {
             fun from(wire: String?): DisplayType? = values().firstOrNull { it.wire == wire }
@@ -176,7 +176,7 @@ object Protocol {
     fun stop(): String = envelope(Type.STOP).toString()
 
     /**
-     * Options-panel row tap (protocol v1.6, design notes): the 0-based index of
+     * Options-panel row tap (protocol v1.6, visual answers): the 0-based index of
      * the row the user pressed. Deliberately NOT a `tap`/`button` message --
      * the screen is UI-only since v1.6 and talk belongs to the mic button and
      * the wake word. The server maps the index back to the stored label.
@@ -186,7 +186,7 @@ object Protocol {
 
     /**
      * Physical mic button, classified by duration (protocol v1.6,
-     * design notes v2). `talk_toggle` = short press (< 700 ms);
+     * hardware notes v2). `talk_toggle` = short press (< 700 ms);
      * `mute` = hold (>= 1 s). The server never times the button.
      */
     fun button(action: String): String =

@@ -10,7 +10,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Speaker playback: 24 kHz mono PCM16, straight from the Live API.
  *
- * The rate is not a choice -- the Live API emits 24 kHz audio out (design notes* section 13) and the server passes it through without resampling, so this is
+ * The rate is not a choice -- the Live API emits 24 kHz audio out (the design notes
+ * section 13) and the server passes it through without resampling, so this is
  * where it lands.
  *
  * **Barge-in is the interesting part.** When the user talks over the model, the

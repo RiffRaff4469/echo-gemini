@@ -14,7 +14,7 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 
 /**
- * The single owner of the camera. Read design notess 2, 5.9 and 8.3 before
+ * The single owner of the camera. Read the design notes sections 2, 5.9 and 8.3 before
  * changing anything in this file.
  *
  * ## The constraints this class exists to satisfy

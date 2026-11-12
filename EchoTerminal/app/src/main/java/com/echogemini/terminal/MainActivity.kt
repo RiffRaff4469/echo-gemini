@@ -44,8 +44,8 @@ import kotlin.math.min
  * ```
  *   StatusOverlay   CAMERA ON indicator            (always on top)
  *   ScheduleScreen  alarms and timers, native
- *   AmbientWeb      the ported ambient UI          (design notes, preferred)
- *   canvasLayer     AmbientClock + tiles + push    (design notes, the fallback)
+ *   AmbientWeb      the ported ambient UI          (ambient webview, preferred)
+ *   canvasLayer     AmbientClock + tiles + push    (canvas ambient, the fallback)
  * ```
  *
  * The ordering matters twice. There is always an ambient layer under
@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     /** Main-thread handler for the button hold timer. */
     private val handler = Handler(Looper.getMainLooper())
 
-    /** Device-owned mute persistence (design notes v2). */
+    /** Device-owned mute persistence (hardware notes v2). */
     private val prefs by lazy { getSharedPreferences("echo", MODE_PRIVATE) }
 
     /** The mute LED once the discovery spike finds a node; null = chip only. */
@@ -285,7 +285,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     }
 
     /**
-     * Hand the screen back to the Canvas ambient (design notes) and never ask
+     * Hand the screen back to the Canvas ambient (canvas ambient) and never ask
      * the WebView again this boot.
      *
      * One-way on purpose: the two reasons this is reached -- no WebView
@@ -401,7 +401,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     // --- screen taps are UI-only (v1.6) ------------------------------------
 
     /**
-     * v1.6 (design notes v2): screen taps no longer start or stop
+     * v1.6 (hardware notes v2): screen taps no longer start or stop
      * conversations -- the screen is for UI only (widgets, chips, pages).
      * The wake word and the physical mic button are the session triggers.
      * This hook stays so the Canvas fallback surface consumes the touch, and
@@ -421,7 +421,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         Log.i(TAG, "tap ignored: screen taps are UI-only since v1.6")
     }
 
-    // --- the physical mic button (design notes v2) ----------------------
+    // --- the physical mic button (hardware notes v2) ----------------------
 
     /**
      * The mic button arrives as KEYCODE_F1 (131) once the device-side
@@ -516,7 +516,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         prefs.edit().putBoolean(PREF_MUTED, on).apply()
         led?.setMuted(on)
         // The WebView home shows a rail mute chip while the device is deaf
-        // (design notes). Calls queue until the page is ready, so a muted boot
+        // (layout engine). Calls queue until the page is ready, so a muted boot
         // still lands the chip.
         web?.mute(on)
         Log.i(TAG, if (on) "privacy MUTE on" else "privacy mute off")
@@ -586,7 +586,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         override fun onOpenStopwatch() = openSchedule("stopwatch")
 
         override fun onSelect(index: Int) {
-            // Options-panel row tap (design notes). Like the transport buttons
+            // Options-panel row tap (visual answers). Like the transport buttons
             // this is a page interaction with a meaning of its own -- it must
             // never also be treated as a screen tap.
             if (link?.state != Link.State.CONNECTED) {
@@ -660,7 +660,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
         if (capture == null) {
             val recorder = AudioCapture { pcm -> if (!scheduler.isRinging) link?.sendAudio(pcm) }
             capture = if (recorder.start()) {
-                // A device that booted muted starts deaf (design notes v2):
+                // A device that booted muted starts deaf (hardware notes v2):
                 // the gate must be applied at creation, not just at toggle time.
                 recorder.muted = privacyMuted
                 recorder
@@ -747,7 +747,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 val body = msg.body
                 val op = body.optString("op", "")
                 // Stopwatch ops ride the alarm_command channel (v1.6,
-                // design notes); route them to the stopwatch, whose
+                // clock notes); route them to the stopwatch, whose
                 // reply is the state ack the server's tool round trip waits on.
                 if (op.startsWith("stopwatch_")) {
                     link?.sendControl(stopwatch.command(body))
@@ -787,7 +787,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
                 applyPrivacyMute(msg.bool("on", false))
             }
 
-            // v1.6 (design notes): the server's focus computation (chat while a
+            // v1.6 (layout engine): the server's focus computation (chat while a
             // session runs, music while the speaker card is up, else home)
             // picks the layout template. Unknown foci fall back to home in the
             // WebView. The Canvas fallback shows the clock for all foci.
@@ -960,7 +960,7 @@ class MainActivity : ComponentActivity(), Link.Listener, CameraSource.Callbacks 
     private val lightListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             val lux = event.values.firstOrNull() ?: return
-            // A clock that blazes at 3 a.m. is its own problem (design notes).
+            // A clock that blazes at 3 a.m. is its own problem (the design notes 8.1).
             // The panel is LCD, so this is about the room, not burn-in.
             val target = when {
                 lux < 2f -> 0.22f

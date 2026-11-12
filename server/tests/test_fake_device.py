@@ -126,7 +126,7 @@ async def test_frames_are_capped_at_one_fps() -> None:
 
 
 async def test_closed_shutter_reports_instead_of_streaming_black() -> None:
-    """design notes: with the privacy latch engaged the camera stays enumerated
+    """the design notes 8.3: with the privacy latch engaged the camera stays enumerated
     and returns black frames. Say so rather than feeding black to the model."""
     device, ws = make_device(shutter=True)
     await device._on_video(P.Video(enabled=True, fps=1.0))

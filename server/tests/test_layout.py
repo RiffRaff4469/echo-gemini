@@ -1,4 +1,4 @@
-"""design notes layout focus: protocol round trip + the arbitration rules."""
+"""layout engine layout focus: protocol round trip + the arbitration rules."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Spotify playback: librespot as a speaker, the Web API as the remote control.
 
-The shape of this, and why (docs/SPOTIFY.md):
+The shape of this, and why (the design notes):
 
     Spotify  --Connect-->  librespot.exe  --stdout PCM-->  PcmConverter
                                                               |
@@ -26,7 +26,7 @@ One speaker, three things that want it, resolved by holds rather than mixing:
   * a **voice session** takes a hold while it is open. Music pauses when the
     wake word fires and resumes afterwards if -- and only if -- it was playing
     before. Ducking instead was rejected: the device's microphone is weak
-    enough that music at any level under it ruins recognition (design notes is
+    enough that music at any level under it ruins recognition (the design notes 8.2 is
     half-duplex for the same reason).
   * an **alarm or timer** takes a hold while it is ringing. The alarm wins
     outright; it is the one sound in the house with a deadline.
@@ -1131,7 +1131,7 @@ class SpotifyController:
 
     def _note_card(self, active: bool) -> None:
         """Notify the host that the display's speaker card appeared/cleared
-        (used for the focus-driven layout, design notes)."""
+        (used for the focus-driven layout, layout engine)."""
         if self._on_card_change is not None:
             try:
                 self._on_card_change(active)

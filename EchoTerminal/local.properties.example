@@ -8,7 +8,7 @@
 #
 # NOTE: a shared secret in BuildConfig is recoverable from the APK by anyone
 # holding the device. That is acceptable here -- the secret is defence in depth
-# behind the tailnet, not the security boundary (design notes) -- but it is
+# behind the tailnet, not the security boundary -- but it is
 # why the GEMINI_API_KEY never goes near this file or the device. Rotate
 # ECHO_SHARED_SECRET if the Show leaves the household.
 

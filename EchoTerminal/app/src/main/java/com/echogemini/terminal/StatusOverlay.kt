@@ -16,7 +16,8 @@ import android.view.View
  * Sits above both the clock and the push surface, because the one thing that
  * must never be obscured by pushed content is the fact that the camera is on.
  *
- * **The camera indicator is a product requirement, not decoration.** design notes* section 8.3: "a camera in a home streaming to a cloud model must be visibly
+ * **The camera indicator is a product requirement, not decoration.** the design notes
+ * section 8.3: "a camera in a home streaming to a cloud model must be visibly
  * doing so." The physical shutter is the household's hard guarantee; this is
  * the software one. It is deliberately large, red, animated and impossible to
  * mistake for anything else.
@@ -75,7 +76,7 @@ class StatusOverlay(context: Context) : View(context) {
         }
 
     /**
-     * Privacy mute (design notes). While true the mic button has put the
+     * Privacy mute (hardware notes). While true the mic button has put the
      * device deaf: no audio leaves it, the wake word cannot fire, and this
      * band shows a persistent "MUTED" pill. Drawn in the state pill's slot --
      * the mute can only be toggled while idle, so it never collides with a
@@ -91,7 +92,7 @@ class StatusOverlay(context: Context) : View(context) {
     /**
      * Whether this band draws the conversation state pill and the stop hint.
      *
-     * False when the WebView ambient is running (design notes): the page draws
+     * False when the WebView ambient is running (ambient webview): the page draws
      * its own conversation chrome, and two "LISTENING" labels on one screen is
      * one too many. The camera indicator is NOT covered by this flag and never
      * will be -- it is the reason this view sits above every surface that can

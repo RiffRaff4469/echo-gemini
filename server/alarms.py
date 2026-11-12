@@ -375,7 +375,7 @@ class AlarmCoordinator:
         self._timeout_s = timeout_s
         self._pending: dict[str, asyncio.Future[AlarmStateMsg]] = {}
         self.last_state: AlarmStateMsg | None = None
-        # Stopwatch acks (v1.6, design notes) answer as
+        # Stopwatch acks (v1.6, clock notes) answer as
         # StopwatchStateMsg rather than AlarmStateMsg, so they wait on their own
         # map; the device pushes one on every transition.
         self._sw_pending: dict[str, asyncio.Future[StopwatchStateMsg]] = {}
@@ -437,7 +437,7 @@ class AlarmCoordinator:
         finally:
             self._sw_pending.pop(req_id, None)
 
-    # --- stopwatch conveniences (v1.6, design notes) ----------------
+    # --- stopwatch conveniences (v1.6, clock notes) ----------------
 
     async def stopwatch_start(self) -> StopwatchStateMsg:
         return await self.request_stopwatch(AlarmOp.STOPWATCH_START)

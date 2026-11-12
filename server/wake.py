@@ -1,6 +1,6 @@
 """Wake word detection over the inbound 16 kHz stream.
 
-Wake word runs here rather than on the device (design notes): it sidesteps
+Wake word runs here rather than on the device (the design notes section 7): it sidesteps
 32-bit Android native libraries, costs the Show zero CPU, and -- the reason that
 actually decides it -- lets us retune against a weak single microphone by
 replaying logged audio, without reflashing anything.
@@ -48,7 +48,7 @@ class DisabledDetector:
 
     This is a *documented* no-op, not a silent stub: it logs once at startup and
     scores every chunk 0.0, so the voice loop still works end to end through
-    tap-to-talk (which design notes keeps as a permanent override anyway).
+    tap-to-talk (which the design notes section 1 keeps as a permanent override anyway).
     """
 
     def __init__(self, reason: str) -> None:
@@ -209,7 +209,7 @@ class EnergyVad:
     Deliberately crude. The device already gates silence; this exists only so
     the server can distinguish "the user is still in a conversation" from "the
     device is streaming room noise", which is what decides when to close a
-    billed Live session (design notes).
+    billed Live session (the design notes section 12).
     """
 
     def __init__(

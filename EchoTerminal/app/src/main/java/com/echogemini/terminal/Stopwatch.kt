@@ -10,7 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Device-owned stopwatch (design notes). Mirrors [AlarmScheduler]: a
+ * Device-owned stopwatch (clock notes). Mirrors [AlarmScheduler]: a
  * main-thread singleton, SharedPreferences-backed, working with the server off.
  *
  * The elapsed time is accumulated in [elapsedMs] plus the live [baseRealtimeMs]

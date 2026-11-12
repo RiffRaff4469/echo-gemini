@@ -12,14 +12,14 @@ import kotlin.math.sqrt
  * Microphone capture: 16 kHz mono PCM16, ~20 ms frames, software gain, VAD gate.
  *
  * **Software gain is not optional here.** On LineageOS only one mic of the
- * array is live and its gain is low (design notes) -- this is called out as
+ * array is live and its gain is low (the design notes) -- this is called out as
  * the single largest technical risk in the project. The multiplier is pushed
  * down by the server from `MIC_GAIN`, whose real value comes from the Phase 3
- * measurement recorded in docs/HARDWARE-STATUS.md. Until that measurement
+ * measurement recorded in the design notes. Until that measurement
  * exists, 1.0 is a placeholder, not a calibration.
  *
  * The VAD gate means silence is never streamed, so an idle device costs the
- * link roughly nothing (design notes). The device makes no judgement about
+ * link roughly nothing (the design notes). The device makes no judgement about
  * meaning -- it decides only "is this loud enough to be worth sending".
  */
 class AudioCapture(private val sink: (ByteArray) -> Unit) {
@@ -42,13 +42,13 @@ class AudioCapture(private val sink: (ByteArray) -> Unit) {
     /**
      * Uplink gate. The server closes this while it is speaking: half-duplex
      * deliberately sidesteps acoustic echo cancellation on a device with one
-     * weak mic (design notes).
+     * weak mic (the design notes).
      */
     @Volatile
     var uplinkEnabled: Boolean = true
 
     /**
-     * Privacy mute (design notes). When true no audio leaves this device
+     * Privacy mute (hardware notes). When true no audio leaves this device
      * at all -- the frames are dropped before the VAD gate, so the server's
      * wake-word detector hears silence and no session can start. This is a
      * client-side deaf: stronger than asking the server to pause detection,
