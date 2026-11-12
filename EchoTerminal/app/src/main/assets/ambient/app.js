@@ -150,7 +150,7 @@
   // Editable without an APK rebuild: this file is an asset, and a later brief
   // can replace the list from a config push without touching Kotlin.
   var CITIES = [
-    { name: 'New York',  tz: 'America/New_York', lat: 43.05, lon: -76.15, hero: true },
+    { name: 'New York',  tz: 'America/New_York', lat: 40.71, lon: -74.01, hero: true },
     { name: 'Singapore', tz: 'Asia/Singapore',   lat: 1.35,  lon: 103.82 },
     { name: 'Geneva',    tz: 'Europe/Zurich',    lat: 46.20, lon: 6.14 }
   ];
