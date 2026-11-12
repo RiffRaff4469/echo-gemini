@@ -126,7 +126,7 @@ class Config:
     # --- ambient weather ----------------------------------------------------
     # Pushed to the device's home screen. The Show has no internet of its own,
     # so this is fetched here (Open-Meteo, no API key) and sent over the link.
-    # Defaults are New York, NY.
+    # Defaults are a neutral placeholder; set WEATHER_LAT / WEATHER_LON.
     weather_enabled: bool = True
     weather_lat: float = 40.7128
     weather_lon: float = -74.0060

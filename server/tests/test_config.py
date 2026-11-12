@@ -156,10 +156,10 @@ def test_post_answer_window_from_the_env_file(tmp_path) -> None:
     assert cfg.post_answer_silence_s == 0.0
 
 
-def test_weather_defaults_to_syracuse(tmp_path) -> None:
+def test_weather_defaults(tmp_path) -> None:
     cfg = load_config(write_env(tmp_path, "ECHO_SHARED_SECRET=a-long-enough-secret\n"))
     assert cfg.weather_enabled is True
-    assert (round(cfg.weather_lat, 4), round(cfg.weather_lon, 4)) == (40.7128, -74.0060)
+    assert (round(cfg.weather_lat, 4), round(cfg.weather_lon, 4)) == (40.7128, -74.006)
     assert cfg.weather_poll_s == 600.0
 
 

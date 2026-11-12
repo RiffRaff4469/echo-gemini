@@ -163,7 +163,7 @@ def build(cfg: Config | None = None, *, state: dict | None = None):
     )
     # Stand in for a completed one-time browser login.
     controller.tokens.refresh_token = "refresh"
-    controller.device_attached("http://100.64.0.1:8765")
+    controller.device_attached("http://203.0.113.9:8765")
     return controller, api, sink
 
 
@@ -315,7 +315,7 @@ async def test_album_art_is_proxied_through_this_server():
     """The Show reaches this machine and, by design, very little else."""
     controller, _, sink = build(state=playing_state())
     await controller.play("weightless")
-    assert sink.cards[0].payload["art_url"] == "http://100.64.0.1:8765/spotify/art/trk1"
+    assert sink.cards[0].payload["art_url"] == "http://203.0.113.9:8765/spotify/art/trk1"
 
 
 async def test_art_proxy_can_be_turned_off():

@@ -23,7 +23,7 @@ def open_meteo(temp=18.4, code=3, is_day=1) -> dict:
     """A response shaped the way the real endpoint shapes one."""
     return {
         "latitude": 40.7128,
-        "longitude": -74.0060,
+        "longitude": -74.006,
         "timezone": "America/New_York",
         "current_units": {"temperature_2m": "°C", "weather_code": "wmo code"},
         "current": {
